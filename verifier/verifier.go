@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Meco30701X/domxss/payloads"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -29,12 +30,34 @@ type AuthConfig struct {
 // Canary is a unique string used to detect if payload reaches the DOM
 const Canary = "xXssCanary42x"
 
-// Payloads to test different source types
-var Payloads = []string{
-	Canary,
-	`<img src=x onerror="window.xssTriggered=true">`,
-	`"><script>window.xssTriggered=true</script>`,
-	`"><svg/onload=window.xssTriggered=true>`,
+// getTestPayloads returns the payload strings to test, optionally filtered by WAF
+func getTestPayloads(waf string) []string {
+	var result []string
+
+	// Always include canary payloads
+	for _, p := range payloads.GetCanaryPayloads(Canary) {
+		result = append(result, p.Value)
+	}
+
+	if waf != "" {
+		// Add WAF-specific bypass payloads
+		for _, p := range payloads.GetPayloadsByWAF(waf) {
+			result = append(result, p.Value)
+		}
+	} else {
+		// Add a selection of base payloads (not all, to keep scan time reasonable)
+		base := payloads.GetBasePayloads()
+		// Use up to 20 base payloads
+		limit := 20
+		if len(base) < limit {
+			limit = len(base)
+		}
+		for i := 0; i < limit; i++ {
+			result = append(result, base[i].Value)
+		}
+	}
+
+	return result
 }
 
 // newChromeContext creates a chromedp context with optional auth config
@@ -90,10 +113,11 @@ func extractDomain(ctx context.Context) string {
 }
 
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string) []VerifyResult {
 	var results []VerifyResult
+	testPayloads := getTestPayloads(waf)
 
-	for _, payload := range Payloads {
+	for _, payload := range testPayloads {
 		r := testHash(targetURL, payload, auth)
 		results = append(results, r)
 
@@ -203,9 +227,22 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyRes
 }
 
 // VerifyStoredXSS tests for stored DOM XSS with optional auth
-func VerifyStoredXSS(targetURL string, auth *AuthConfig) []VerifyResult {
+func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string) []VerifyResult {
 	var results []VerifyResult
-	canaryPayload := `<img src=x onerror="window.xssTriggered=true">` + Canary
+
+	// Get canary payloads for stored XSS testing
+	canaryPayloads := payloads.GetCanaryPayloads(Canary)
+	var testPayloads []string
+	for _, p := range canaryPayloads {
+		testPayloads = append(testPayloads, p.Value)
+	}
+
+	// Add WAF bypass payloads if specified
+	if waf != "" {
+		for _, p := range payloads.GetPayloadsByWAF(waf) {
+			testPayloads = append(testPayloads, p.Value)
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -263,10 +300,12 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig) []VerifyResult {
 		return results
 	}
 
-	// Step 2: Fill and submit each input
+	// Step 2: Fill and submit each input with each payload
 	for _, input := range inputs {
-		r := testStoredInput(taskCtx, targetURL, input, canaryPayload)
-		results = append(results, r)
+		for _, payload := range testPayloads {
+			r := testStoredInput(taskCtx, targetURL, input, payload)
+			results = append(results, r)
+		}
 	}
 
 	// Step 3: Reload and check persistence
@@ -283,12 +322,12 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig) []VerifyResult {
 	if err == nil {
 		if jsTriggered {
 			results = append(results, VerifyResult{
-				Source: "stored", Payload: canaryPayload, Triggered: true,
+				Source: "stored", Payload: "canary", Triggered: true,
 				Detail: "JavaScript executed after page reload (stored XSS confirmed)",
 			})
 		} else if strings.Contains(afterHTML, Canary) {
 			results = append(results, VerifyResult{
-				Source: "stored", Payload: canaryPayload, Triggered: true,
+				Source: "stored", Payload: "canary", Triggered: true,
 				Detail: "Payload persisted in DOM after reload (stored HTML injection)",
 			})
 		}
