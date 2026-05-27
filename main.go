@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Meco30701X/domxss/crawler"
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/report"
 	"github.com/Meco30701X/domxss/scanner"
@@ -16,7 +17,8 @@ func main() {
 	url := flag.String("u", "", "Target URL to scan")
 	file := flag.String("f", "", "Local JS file to scan")
 	output := flag.String("o", "", "Output results to JSON file")
-	verify := flag.Bool("verify", false, "Dynamic verification with headless browser")
+	verify := flag.Bool("verify", false, "Dynamic verification (reflected DOM XSS)")
+	stored := flag.Bool("stored", false, "Test for stored DOM XSS (auto-detect forms, fill & submit)")
 	flag.Parse()
 
 	if *url == "" && *file == "" {
@@ -24,7 +26,8 @@ func main() {
 		fmt.Println()
 		fmt.Println("Usage:")
 		fmt.Println("  domxss -u https://example.com          # Static analysis")
-		fmt.Println("  domxss -u https://example.com -verify   # Static + dynamic verification")
+		fmt.Println("  domxss -u URL -verify                   # Reflected DOM XSS verification")
+		fmt.Println("  domxss -u URL -stored                   # Stored DOM XSS (auto-detect inputs)")
 		fmt.Println("  domxss -f script.js                     # Scan a local file")
 		fmt.Println("  domxss -u URL -o result.json            # Save results to JSON")
 		fmt.Println()
@@ -32,11 +35,13 @@ func main() {
 		fmt.Println("  -u        Target URL")
 		fmt.Println("  -f        Local JS file")
 		fmt.Println("  -o        Output JSON file")
-		fmt.Println("  -verify   Enable dynamic verification (headless browser)")
+		fmt.Println("  -verify   Reflected DOM XSS (headless browser)")
+		fmt.Println("  -stored   Stored DOM XSS (form detection + auto-fill)")
 		os.Exit(1)
 	}
 
 	var allFindings []scanner.Finding
+	var allVerifyResults []verifier.VerifyResult
 	var targetName string
 
 	if *file != "" {
@@ -87,24 +92,46 @@ func main() {
 	// Static analysis results
 	report.PrintFindings(allFindings, targetName)
 
-	// Dynamic verification
+	// Reflected DOM XSS verification
 	if *verify && *url != "" {
-		fmt.Println("\n[*] Running dynamic verification with headless browser...")
-		fmt.Println("[*] Testing payloads against target...")
+		fmt.Println("\n[*] Running reflected DOM XSS verification...")
+		fmt.Println("[*] Testing hash and query parameter injection...")
 
 		results := verifier.VerifyURL(*url)
+		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
+	}
 
-		if *output != "" {
-			// Append verification results to JSON output
-			report.OutputVerifiedJSON(allFindings, results, *output)
-		}
-	} else if *output != "" {
-		if err := report.OutputJSON(allFindings, *output); err != nil {
-			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
+	// Stored DOM XSS testing
+	if *stored && *url != "" {
+		fmt.Println("\n[*] Running stored DOM XSS detection...")
+		fmt.Println("[*] Detecting input fields and forms...")
+
+		// Step 1: Detect input points
+		crawlResult, err := crawler.DetectInputs(*url)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "  ⚠ Crawl error: %v\n", err)
 		} else {
-			fmt.Printf("\n[*] Results saved to %s\n", *output)
+			crawler.PrintInputs(crawlResult)
+
+			// Step 2: Auto-fill and test
+			if len(crawlResult.Inputs) > 0 {
+				fmt.Println("\n[*] Testing stored XSS via form submission...")
+				results := verifier.VerifyStoredXSS(*url)
+				allVerifyResults = append(allVerifyResults, results...)
+				verifier.PrintResults(results)
+			}
 		}
+	}
+
+	// Save results
+	if *output != "" {
+		if len(allVerifyResults) > 0 {
+			report.OutputVerifiedJSON(allFindings, allVerifyResults, *output)
+		} else {
+			report.OutputJSON(allFindings, *output)
+		}
+		fmt.Printf("\n[*] Results saved to %s\n", *output)
 	}
 
 	if len(allFindings) > 0 {
