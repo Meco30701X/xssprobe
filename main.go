@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Meco30701X/domxss/crawler"
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/payloads"
 	"github.com/Meco30701X/domxss/report"
+	"github.com/Meco30701X/domxss/safety"
 	"github.com/Meco30701X/domxss/scanner"
 	"github.com/Meco30701X/domxss/verifier"
 )
@@ -40,6 +40,9 @@ func main() {
 	waf := flag.String("waf", "", "Target WAF: cloudflare, aws, modsec, generic")
 	threads := flag.Int("threads", 5, "Number of concurrent threads for batch scanning")
 	waitTime := flag.Int("wait", 5, "Wait time in seconds for SPA rendering")
+	dryRun := flag.Bool("dry-run", false, "Dry-run: detect inputs but don't submit (safest)")
+	safePayloads := flag.Bool("safe", false, "Use only harmless canary payloads")
+	confirm := flag.Bool("confirm", false, "Ask for confirmation before each submission")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
@@ -94,11 +97,25 @@ func main() {
 		fmt.Printf("[*] WAF mode: %s (%d bypass payloads loaded)\n", *waf, len(wafPayloads))
 	}
 
+	// Build safety mode
+	safetyMode := &safety.SafetyMode{
+		DryRun:  *dryRun,
+		Safe:    *safePayloads,
+		Confirm: *confirm,
+	}
+
+	// If stored mode without any safety flag, default to safe+confirm
+	if *stored && !*dryRun && !*safePayloads && !*confirm {
+		safetyMode.Safe = true
+		safetyMode.Confirm = true
+		fmt.Println("[*] Stored XSS: using safe payloads with confirmation (use -dry-run for safest mode)")
+	}
+
 	// Single URL or batch
 	if len(urls) == 1 {
-		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output)
+		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode)
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads)
+		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode)
 	}
 }
 
@@ -108,7 +125,9 @@ func printUsage() {
 	fmt.Println("Usage:")
 	fmt.Println("  domxss -u https://example.com                          # Static analysis")
 	fmt.Println("  domxss -u URL -verify                                   # Reflected DOM XSS")
-	fmt.Println("  domxss -u URL -stored                                   # Stored DOM XSS")
+	fmt.Println("  domxss -u URL -stored -dry-run                          # Stored XSS (safe, no submit)")
+	fmt.Println("  domxss -u URL -stored -safe -confirm                    # Stored XSS (safe payloads)")
+	fmt.Println("  domxss -u URL -stored                                   # Stored XSS (full test)")
 	fmt.Println("  domxss -u URL -spa                                      # SPA rendering mode")
 	fmt.Println("  domxss -u URL -verify -waf cloudflare                   # WAF bypass mode")
 	fmt.Println("  domxss -l urls.txt -threads 10                          # Batch scan")
@@ -128,6 +147,11 @@ func printUsage() {
 	fmt.Println("  -wait       Wait time for SPA rendering in seconds (default: 5)")
 	fmt.Println("  -cookie     Cookie string for auth")
 	fmt.Println("  -H          Custom header (repeatable)")
+	fmt.Println()
+	fmt.Println("Safety Flags (for stored XSS):")
+	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (safest)")
+	fmt.Println("  -safe       Use only harmless canary payloads")
+	fmt.Println("  -confirm    Ask for confirmation before each submission")
 	fmt.Println()
 	fmt.Printf("Payload library: %d payloads available\n", payloads.Count())
 }
@@ -171,7 +195,7 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string) {
+func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
 
@@ -278,23 +302,9 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 	// Stored DOM XSS
 	if doStored {
 		fmt.Println("\n[*] Stored DOM XSS detection...")
-		crawlAuth := &crawler.AuthConfig{}
-		if auth != nil {
-			crawlAuth.Cookies = auth.Cookies
-			crawlAuth.Headers = auth.Headers
-		}
-		crawlResult, err := crawler.DetectInputs(targetURL, crawlAuth)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "  ⚠ %v\n", err)
-		} else {
-			crawler.PrintInputs(crawlResult)
-			if len(crawlResult.Inputs) > 0 {
-				fmt.Println("\n[*] Testing stored XSS...")
-				results := verifier.VerifyStoredXSS(targetURL, auth, waf)
-				allVerifyResults = append(allVerifyResults, results...)
-				verifier.PrintResults(results)
-			}
-		}
+		results, _ := verifier.VerifyStoredXSS(targetURL, auth, waf, safetyMode)
+		allVerifyResults = append(allVerifyResults, results...)
+		verifier.PrintResults(results)
 	}
 
 	// Save results
@@ -308,7 +318,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int) {
+func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -402,19 +412,11 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 
 			// Stored XSS
 			if doStored {
-				crawlAuth := &crawler.AuthConfig{}
-				if auth != nil {
-					crawlAuth.Cookies = auth.Cookies
-					crawlAuth.Headers = auth.Headers
-				}
-				crawlResult, err := crawler.DetectInputs(u, crawlAuth)
-				if err == nil && len(crawlResult.Inputs) > 0 {
-					results := verifier.VerifyStoredXSS(u, auth, waf)
-					verifyResults = append(verifyResults, results...)
-					for _, r := range results {
-						if r.Triggered {
-							fmt.Printf("  [!] Stored XSS: %s\n", r.Detail)
-						}
+				results, _ := verifier.VerifyStoredXSS(u, auth, waf, safetyMode)
+				verifyResults = append(verifyResults, results...)
+				for _, r := range results {
+					if r.Triggered {
+						fmt.Printf("  [!] Stored XSS: %s\n", r.Detail)
 					}
 				}
 			}

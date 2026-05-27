@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Meco30701X/domxss/payloads"
+	"github.com/Meco30701X/domxss/safety"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
@@ -226,23 +227,12 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyRes
 	return result
 }
 
-// VerifyStoredXSS tests for stored DOM XSS with optional auth
-func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string) []VerifyResult {
+// VerifyStoredXSS tests for stored DOM XSS with safety controls
+func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode *safety.SafetyMode) ([]VerifyResult, bool) {
 	var results []VerifyResult
 
-	// Get canary payloads for stored XSS testing
-	canaryPayloads := payloads.GetCanaryPayloads(Canary)
-	var testPayloads []string
-	for _, p := range canaryPayloads {
-		testPayloads = append(testPayloads, p.Value)
-	}
-
-	// Add WAF bypass payloads if specified
-	if waf != "" {
-		for _, p := range payloads.GetPayloadsByWAF(waf) {
-			testPayloads = append(testPayloads, p.Value)
-		}
-	}
+	// Safety: print configuration
+	safety.PrintSafetyInfo(safetyMode)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -288,7 +278,7 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string) []VerifyRes
 		results = append(results, VerifyResult{
 			Source: "stored", Detail: "failed to load page: " + err.Error(),
 		})
-		return results
+		return results, false
 	}
 
 	inputs := parseInputSelectors(inputJSON)
@@ -297,43 +287,103 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string) []VerifyRes
 		results = append(results, VerifyResult{
 			Source: "stored", Detail: "no input fields found on page",
 		})
-		return results
+		return results, false
 	}
 
-	// Step 2: Fill and submit each input with each payload
+	// Convert to safety.InputInfo for dry-run report
+	var inputInfos []safety.InputInfo
+	for _, input := range inputs {
+		inputInfos = append(inputInfos, safety.InputInfo{
+			Selector: input.Selector,
+			Tag:      input.Tag,
+			Name:     input.Name,
+		})
+	}
+
+	// DRY RUN MODE: Only analyze, don't submit
+	if safetyMode.DryRun {
+		safety.PrintDryRunReport(inputInfos, false)
+		return results, false
+	}
+
+	// Build payload list based on safety mode
+	var testPayloads []string
+	if safetyMode.Safe {
+		// Use only safe canary payloads
+		testPayloads = safety.GetSafePayloads()
+		fmt.Printf("[*] Using %d safe canary payloads (no dangerous code)\n", len(testPayloads))
+	} else {
+		// Use real payloads (with warning)
+		fmt.Println("\n  ⚠️  WARNING: Using real XSS payloads!")
+		fmt.Println("  ⚠️  Ensure you have authorization to test this system.")
+
+		canaryPayloads := payloads.GetCanaryPayloads(Canary)
+		for _, p := range canaryPayloads {
+			testPayloads = append(testPayloads, p.Value)
+		}
+		if waf != "" {
+			for _, p := range payloads.GetPayloadsByWAF(waf) {
+				testPayloads = append(testPayloads, p.Value)
+			}
+		}
+	}
+
+	// CONFIRM MODE: Ask before each submission
+	submitted := false
 	for _, input := range inputs {
 		for _, payload := range testPayloads {
+			// Safety check: validate payload is safe if in safe mode
+			if safetyMode.Safe && !safety.IsSafePayload(payload) {
+				continue
+			}
+
+			if safetyMode.Confirm {
+				action := fmt.Sprintf("Submit payload via %s", input.Selector)
+				detail := fmt.Sprintf("Payload: %s", payload)
+				if !safety.ConfirmPrompt(action, detail) {
+					fmt.Println("  [→] Skipped")
+					continue
+				}
+			}
+
 			r := testStoredInput(taskCtx, targetURL, input, payload)
 			results = append(results, r)
+			submitted = true
+
+			if r.Triggered {
+				fmt.Printf("  [!] Confirmed: %s\n", r.Detail)
+			}
 		}
 	}
 
-	// Step 3: Reload and check persistence
-	var afterHTML string
-	var jsTriggered bool
+	// Step 3: Reload and check persistence (only if we submitted something)
+	if submitted {
+		var afterHTML string
+		var jsTriggered bool
 
-	err = chromedp.Run(taskCtx,
-		chromedp.Navigate(targetURL),
-		chromedp.Sleep(3*time.Second),
-		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
-		chromedp.InnerHTML("html", &afterHTML),
-	)
+		err = chromedp.Run(taskCtx,
+			chromedp.Navigate(targetURL),
+			chromedp.Sleep(3*time.Second),
+			chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
+			chromedp.InnerHTML("html", &afterHTML),
+		)
 
-	if err == nil {
-		if jsTriggered {
-			results = append(results, VerifyResult{
-				Source: "stored", Payload: "canary", Triggered: true,
-				Detail: "JavaScript executed after page reload (stored XSS confirmed)",
-			})
-		} else if strings.Contains(afterHTML, Canary) {
-			results = append(results, VerifyResult{
-				Source: "stored", Payload: "canary", Triggered: true,
-				Detail: "Payload persisted in DOM after reload (stored HTML injection)",
-			})
+		if err == nil {
+			if jsTriggered {
+				results = append(results, VerifyResult{
+					Source: "stored", Payload: "canary", Triggered: true,
+					Detail: "JavaScript executed after page reload (stored XSS confirmed)",
+				})
+			} else if strings.Contains(afterHTML, Canary) {
+				results = append(results, VerifyResult{
+					Source: "stored", Payload: "canary", Triggered: true,
+					Detail: "Payload persisted in DOM after reload (stored HTML injection)",
+				})
+			}
 		}
 	}
 
-	return results
+	return results, submitted
 }
 
 type inputInfo struct {
