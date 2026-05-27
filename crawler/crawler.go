@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/dom"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -33,8 +34,14 @@ type FormInfo struct {
 	Inputs   []InputPoint
 }
 
+// AuthConfig holds authentication info
+type AuthConfig struct {
+	Cookies []string
+	Headers map[string]string
+}
+
 // DetectInputs finds all input points on a page (forms, textareas, contenteditable elements)
-func DetectInputs(targetURL string) (*CrawlResult, error) {
+func DetectInputs(targetURL string, auth *AuthConfig) (*CrawlResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -49,6 +56,27 @@ func DetectInputs(targetURL string) (*CrawlResult, error) {
 
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
+
+	// Apply auth
+	if auth != nil {
+		var actions []chromedp.Action
+		for _, cookie := range auth.Cookies {
+			parts := strings.SplitN(cookie, "=", 2)
+			if len(parts) == 2 {
+				actions = append(actions, network.SetCookie(parts[0], parts[1]).WithPath("/"))
+			}
+		}
+		if len(auth.Headers) > 0 {
+			headerMap := network.Headers{}
+			for k, v := range auth.Headers {
+				headerMap[k] = v
+			}
+			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
+		}
+		if len(actions) > 0 {
+			chromedp.Run(taskCtx, actions...)
+		}
+	}
 
 	result := &CrawlResult{URL: targetURL}
 

@@ -13,31 +13,70 @@ import (
 	"github.com/Meco30701X/domxss/verifier"
 )
 
+// headerFlags allows multiple -header flags
+type headerFlags map[string]string
+
+func (h headerFlags) String() string {
+	return fmt.Sprintf("%v", map[string]string(h))
+}
+
+func (h headerFlags) Set(value string) error {
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) == 2 {
+		h[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	return nil
+}
+
 func main() {
 	url := flag.String("u", "", "Target URL to scan")
 	file := flag.String("f", "", "Local JS file to scan")
 	output := flag.String("o", "", "Output results to JSON file")
 	verify := flag.Bool("verify", false, "Dynamic verification (reflected DOM XSS)")
 	stored := flag.Bool("stored", false, "Test for stored DOM XSS (auto-detect forms, fill & submit)")
+	cookie := flag.String("cookie", "", "Cookie string (e.g. \"session=abc; token=xyz\")")
+	headers := make(headerFlags)
+	flag.Var(&headers, "H", "Custom header (e.g. \"Authorization: Bearer xxx\"). Can be used multiple times.")
 	flag.Parse()
 
 	if *url == "" && *file == "" {
 		fmt.Println("DOMXSS - DOM XSS Detection Tool")
 		fmt.Println()
 		fmt.Println("Usage:")
-		fmt.Println("  domxss -u https://example.com          # Static analysis")
-		fmt.Println("  domxss -u URL -verify                   # Reflected DOM XSS verification")
-		fmt.Println("  domxss -u URL -stored                   # Stored DOM XSS (auto-detect inputs)")
-		fmt.Println("  domxss -f script.js                     # Scan a local file")
-		fmt.Println("  domxss -u URL -o result.json            # Save results to JSON")
+		fmt.Println("  domxss -u https://example.com                          # Static analysis")
+		fmt.Println("  domxss -u URL -verify                                   # Reflected DOM XSS")
+		fmt.Println("  domxss -u URL -stored                                   # Stored DOM XSS")
+		fmt.Println("  domxss -u URL -stored -cookie \"session=abc\" -H \"Authorization: Bearer xxx\"")
+		fmt.Println("  domxss -f script.js                                     # Scan local file")
+		fmt.Println("  domxss -u URL -o result.json                            # Export JSON")
 		fmt.Println()
 		fmt.Println("Flags:")
-		fmt.Println("  -u        Target URL")
-		fmt.Println("  -f        Local JS file")
-		fmt.Println("  -o        Output JSON file")
-		fmt.Println("  -verify   Reflected DOM XSS (headless browser)")
-		fmt.Println("  -stored   Stored DOM XSS (form detection + auto-fill)")
+		fmt.Println("  -u          Target URL")
+		fmt.Println("  -f          Local JS file")
+		fmt.Println("  -o          Output JSON file")
+		fmt.Println("  -verify     Reflected DOM XSS (headless browser)")
+		fmt.Println("  -stored     Stored DOM XSS (form detection + auto-fill)")
+		fmt.Println("  -cookie     Cookie string for authenticated testing")
+		fmt.Println("  -H          Custom header (repeatable, e.g. -H \"K: V\")")
 		os.Exit(1)
+	}
+
+	// Build auth config
+	var auth *verifier.AuthConfig
+	if *cookie != "" || len(headers) > 0 {
+		auth = &verifier.AuthConfig{
+			Headers: headers,
+		}
+		// Parse cookie string: "key1=val1; key2=val2" → ["key1=val1", "key2=val2"]
+		if *cookie != "" {
+			for _, c := range strings.Split(*cookie, ";") {
+				c = strings.TrimSpace(c)
+				if c != "" {
+					auth.Cookies = append(auth.Cookies, c)
+				}
+			}
+		}
+		fmt.Printf("[*] Auth configured: %d cookie(s), %d header(s)\n", len(auth.Cookies), len(auth.Headers))
 	}
 
 	var allFindings []scanner.Finding
@@ -95,9 +134,7 @@ func main() {
 	// Reflected DOM XSS verification
 	if *verify && *url != "" {
 		fmt.Println("\n[*] Running reflected DOM XSS verification...")
-		fmt.Println("[*] Testing hash and query parameter injection...")
-
-		results := verifier.VerifyURL(*url)
+		results := verifier.VerifyURL(*url, auth)
 		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
 	}
@@ -105,19 +142,22 @@ func main() {
 	// Stored DOM XSS testing
 	if *stored && *url != "" {
 		fmt.Println("\n[*] Running stored DOM XSS detection...")
-		fmt.Println("[*] Detecting input fields and forms...")
 
-		// Step 1: Detect input points
-		crawlResult, err := crawler.DetectInputs(*url)
+		crawlAuth := &crawler.AuthConfig{}
+		if auth != nil {
+			crawlAuth.Cookies = auth.Cookies
+			crawlAuth.Headers = auth.Headers
+		}
+
+		crawlResult, err := crawler.DetectInputs(*url, crawlAuth)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  ⚠ Crawl error: %v\n", err)
 		} else {
 			crawler.PrintInputs(crawlResult)
 
-			// Step 2: Auto-fill and test
 			if len(crawlResult.Inputs) > 0 {
 				fmt.Println("\n[*] Testing stored XSS via form submission...")
-				results := verifier.VerifyStoredXSS(*url)
+				results := verifier.VerifyStoredXSS(*url, auth)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}

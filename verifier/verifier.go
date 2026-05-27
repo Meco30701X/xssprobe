@@ -7,16 +7,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/chromedp/chromedp"
+	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/chromedp"
 )
 
 // VerifyResult represents the result of a dynamic verification
 type VerifyResult struct {
-	Payload    string
-	Source     string
-	Triggered  bool
-	Detail     string
+	Payload   string `json:"payload"`
+	Source    string `json:"source"`
+	Triggered bool   `json:"triggered"`
+	Detail    string `json:"detail"`
+}
+
+// AuthConfig holds authentication info for requests
+type AuthConfig struct {
+	Cookies []string          // e.g. ["session=abc123", "token=xyz"]
+	Headers map[string]string // e.g. {"Authorization": "Bearer xxx"}
 }
 
 // Canary is a unique string used to detect if payload reaches the DOM
@@ -24,53 +31,14 @@ const Canary = "xXssCanary42x"
 
 // Payloads to test different source types
 var Payloads = []string{
-	// Basic canary injection
 	Canary,
-	// HTML injection
 	`<img src=x onerror="window.xssTriggered=true">`,
-	// Script injection
 	`"><script>window.xssTriggered=true</script>`,
-	// Event handler
 	`"><svg/onload=window.xssTriggered=true>`,
 }
 
-// VerifyURL tests a URL for DOM XSS by injecting payloads into various sources
-func VerifyURL(targetURL string) []VerifyResult {
-	var results []VerifyResult
-
-	for _, payload := range Payloads {
-		// Test location.hash
-		r := testWithChromedp(targetURL, "hash", payload)
-		results = append(results, r)
-
-		// Test location.search (common param names)
-		for _, param := range []string{"q", "search", "id", "page", "input", "name", "s"} {
-			r = testSearchParam(targetURL, param, payload)
-			results = append(results, r)
-		}
-	}
-
-	return results
-}
-
-// testWithChromedp navigates to a URL with a payload in the hash and checks for XSS trigger
-func testWithChromedp(baseURL, source, payload string) VerifyResult {
-	result := VerifyResult{
-		Payload: payload,
-		Source:  source,
-	}
-
-	var testURL string
-	switch source {
-	case "hash":
-		testURL = baseURL + "#" + url.QueryEscape(payload)
-	default:
-		testURL = baseURL
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
+// newChromeContext creates a chromedp context with optional auth config
+func newChromeContext(ctx context.Context, auth *AuthConfig) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -79,12 +47,75 @@ func testWithChromedp(baseURL, source, payload string) VerifyResult {
 	)
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer allocCancel()
-
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+
+	// Apply auth if provided
+	if auth != nil {
+		var actions []chromedp.Action
+
+		// Set cookies
+		for _, cookie := range auth.Cookies {
+			parts := strings.SplitN(cookie, "=", 2)
+			if len(parts) == 2 {
+				actions = append(actions, network.SetCookie(parts[0], parts[1]).
+					WithDomain(extractDomain(ctx)).
+					WithPath("/"))
+			}
+		}
+
+		// Set custom headers
+		if len(auth.Headers) > 0 {
+			headerMap := network.Headers{}
+			for k, v := range auth.Headers {
+				headerMap[k] = v
+			}
+			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
+		}
+
+		if len(actions) > 0 {
+			chromedp.Run(taskCtx, actions...)
+		}
+	}
+
+	combinedCancel := func() {
+		taskCancel()
+		allocCancel()
+	}
+
+	return taskCtx, combinedCancel
+}
+
+func extractDomain(ctx context.Context) string {
+	return ""
+}
+
+// VerifyURL tests a URL for reflected DOM XSS
+func VerifyURL(targetURL string, auth *AuthConfig) []VerifyResult {
+	var results []VerifyResult
+
+	for _, payload := range Payloads {
+		r := testHash(targetURL, payload, auth)
+		results = append(results, r)
+
+		for _, param := range []string{"q", "search", "id", "page", "input", "name", "s"} {
+			r = testSearchParam(targetURL, param, payload, auth)
+			results = append(results, r)
+		}
+	}
+
+	return results
+}
+
+func testHash(baseURL, payload string, auth *AuthConfig) VerifyResult {
+	result := VerifyResult{Payload: payload, Source: "hash"}
+	testURL := baseURL + "#" + url.QueryEscape(payload)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	taskCtx, taskCancel := newChromeContext(ctx, auth)
 	defer taskCancel()
 
-	// Listen for alert dialogs
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
 		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
 			result.Triggered = true
@@ -118,12 +149,8 @@ func testWithChromedp(baseURL, source, payload string) VerifyResult {
 	return result
 }
 
-// testSearchParam tests a specific query parameter for XSS
-func testSearchParam(baseURL, param, payload string) VerifyResult {
-	result := VerifyResult{
-		Payload: payload,
-		Source:  "search:" + param,
-	}
+func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyResult {
+	result := VerifyResult{Payload: payload, Source: "search:" + param}
 
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
@@ -139,17 +166,7 @@ func testSearchParam(baseURL, param, payload string) VerifyResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-web-security", true),
-	)
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer allocCancel()
-
-	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+	taskCtx, taskCancel := newChromeContext(ctx, auth)
 	defer taskCancel()
 
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
@@ -185,26 +202,15 @@ func testSearchParam(baseURL, param, payload string) VerifyResult {
 	return result
 }
 
-// VerifyStoredXSS tests for stored DOM XSS by filling forms with payloads
-func VerifyStoredXSS(targetURL string) []VerifyResult {
+// VerifyStoredXSS tests for stored DOM XSS with optional auth
+func VerifyStoredXSS(targetURL string, auth *AuthConfig) []VerifyResult {
 	var results []VerifyResult
-
 	canaryPayload := `<img src=x onerror="window.xssTriggered=true">` + Canary
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.Flag("headless", true),
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-web-security", true),
-	)
-
-	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
-	defer allocCancel()
-
-	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
+	taskCtx, taskCancel := newChromeContext(ctx, auth)
 	defer taskCancel()
 
 	// Step 1: Navigate and find input fields
@@ -243,34 +249,27 @@ func VerifyStoredXSS(targetURL string) []VerifyResult {
 
 	if err != nil {
 		results = append(results, VerifyResult{
-			Source:    "stored",
-			Payload:   "",
-			Triggered: false,
-			Detail:    "failed to load page: " + err.Error(),
+			Source: "stored", Detail: "failed to load page: " + err.Error(),
 		})
 		return results
 	}
 
-	// Parse inputs from JSON
 	inputs := parseInputSelectors(inputJSON)
 
 	if len(inputs) == 0 {
 		results = append(results, VerifyResult{
-			Source:    "stored",
-			Payload:   "",
-			Triggered: false,
-			Detail:    "no input fields found on page",
+			Source: "stored", Detail: "no input fields found on page",
 		})
 		return results
 	}
 
-	// Step 2: For each input field, try filling and submitting
+	// Step 2: Fill and submit each input
 	for _, input := range inputs {
 		r := testStoredInput(taskCtx, targetURL, input, canaryPayload)
 		results = append(results, r)
 	}
 
-	// Step 3: Reload page and check if any payload persisted in DOM
+	// Step 3: Reload and check persistence
 	var afterHTML string
 	var jsTriggered bool
 
@@ -284,17 +283,13 @@ func VerifyStoredXSS(targetURL string) []VerifyResult {
 	if err == nil {
 		if jsTriggered {
 			results = append(results, VerifyResult{
-				Source:    "stored",
-				Payload:   canaryPayload,
-				Triggered: true,
-				Detail:    "JavaScript executed after page reload (stored XSS confirmed)",
+				Source: "stored", Payload: canaryPayload, Triggered: true,
+				Detail: "JavaScript executed after page reload (stored XSS confirmed)",
 			})
 		} else if strings.Contains(afterHTML, Canary) {
 			results = append(results, VerifyResult{
-				Source:    "stored",
-				Payload:   canaryPayload,
-				Triggered: true,
-				Detail:    "Payload persisted in DOM after reload (stored HTML injection)",
+				Source: "stored", Payload: canaryPayload, Triggered: true,
+				Detail: "Payload persisted in DOM after reload (stored HTML injection)",
 			})
 		}
 	}
@@ -311,8 +306,6 @@ type inputInfo struct {
 
 func parseInputSelectors(jsonStr string) []inputInfo {
 	var inputs []inputInfo
-
-	// Simple parser for the JSON array
 	parts := extractJSONArrayItems(jsonStr)
 	for _, part := range parts {
 		input := inputInfo{
@@ -361,7 +354,6 @@ func extractStr(jsonObj, key string) string {
 		return ""
 	}
 	rest = rest[colonIdx+1:]
-	// Skip whitespace
 	for len(rest) > 0 && (rest[0] == ' ' || rest[0] == '\t') {
 		rest = rest[1:]
 	}
@@ -383,57 +375,56 @@ func testStoredInput(ctx context.Context, baseURL string, input inputInfo, paylo
 	}
 
 	var fillJS string
-	if input.Tag == "textarea" {
+	if input.Tag == "textarea" || input.Tag == "input" {
 		fillJS = fmt.Sprintf(`
 			var el = document.querySelector(%q);
 			if (el) { el.value = %q; el.dispatchEvent(new Event('input', {bubbles:true})); }
 		`, input.Selector, payload)
-	} else if input.Tag == "div" || input.Tag == "span" {
+	} else {
 		// contenteditable
 		fillJS = fmt.Sprintf(`
 			var el = document.querySelector(%q);
 			if (el) { el.innerHTML = %q; el.dispatchEvent(new Event('input', {bubbles:true})); }
 		`, input.Selector, payload)
-	} else {
-		fillJS = fmt.Sprintf(`
-			var el = document.querySelector(%q);
-			if (el) { el.value = %q; el.dispatchEvent(new Event('input', {bubbles:true})); }
-		`, input.Selector, payload)
 	}
 
-	// Fill the input and try to submit
 	submitJS := fillJS + `
-		var form = document.querySelector(` + fmt.Sprintf("%q", input.Selector) + `).closest('form');
-		if (form) {
-			var submitBtn = form.querySelector('button[type="submit"], input[type="submit"], button');
-			if (submitBtn) submitBtn.click();
-			else form.submit();
-		}
+		(function() {
+			var el = document.querySelector(` + fmt.Sprintf("%q", input.Selector) + `);
+			var form = el ? el.closest('form') : null;
+			if (form) {
+				var btn = form.querySelector('button[type="submit"], input[type="submit"], button');
+				if (btn) btn.click(); else form.submit();
+				return 'submitted';
+			}
+			return 'no_form';
+		})()
 	`
 
 	var domContent string
 	var jsTriggered bool
+	var submitResult string
 
 	err := chromedp.Run(ctx,
 		chromedp.Evaluate(fillJS, nil),
 		chromedp.Sleep(500*time.Millisecond),
-		chromedp.Evaluate(submitJS, nil),
+		chromedp.Evaluate(submitJS, &submitResult),
 		chromedp.Sleep(3*time.Second),
 		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
 		chromedp.InnerHTML("html", &domContent),
 	)
 
 	if err != nil {
-		result.Detail = "error filling input: " + err.Error()
+		result.Detail = "error: " + err.Error()
 		return result
 	}
 
 	if jsTriggered {
 		result.Triggered = true
-		result.Detail = "JavaScript executed after form submission via " + input.Selector
+		result.Detail = "JS executed after form submission via " + input.Selector
 	} else if strings.Contains(domContent, Canary) {
 		result.Triggered = true
-		result.Detail = "Payload reflected in DOM after submission via " + input.Selector
+		result.Detail = "Payload reflected in DOM via " + input.Selector
 	}
 
 	return result
