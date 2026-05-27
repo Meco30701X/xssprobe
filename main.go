@@ -9,20 +9,30 @@ import (
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/report"
 	"github.com/Meco30701X/domxss/scanner"
+	"github.com/Meco30701X/domxss/verifier"
 )
 
 func main() {
 	url := flag.String("u", "", "Target URL to scan")
 	file := flag.String("f", "", "Local JS file to scan")
 	output := flag.String("o", "", "Output results to JSON file")
+	verify := flag.Bool("verify", false, "Dynamic verification with headless browser")
 	flag.Parse()
 
 	if *url == "" && *file == "" {
 		fmt.Println("DOMXSS - DOM XSS Detection Tool")
+		fmt.Println()
 		fmt.Println("Usage:")
-		fmt.Println("  domxss -u https://example.com    # Scan a URL")
-		fmt.Println("  domxss -f script.js              # Scan a local file")
-		fmt.Println("  domxss -u URL -o result.json     # Save results to JSON")
+		fmt.Println("  domxss -u https://example.com          # Static analysis")
+		fmt.Println("  domxss -u https://example.com -verify   # Static + dynamic verification")
+		fmt.Println("  domxss -f script.js                     # Scan a local file")
+		fmt.Println("  domxss -u URL -o result.json            # Save results to JSON")
+		fmt.Println()
+		fmt.Println("Flags:")
+		fmt.Println("  -u        Target URL")
+		fmt.Println("  -f        Local JS file")
+		fmt.Println("  -o        Output JSON file")
+		fmt.Println("  -verify   Enable dynamic verification (headless browser)")
 		os.Exit(1)
 	}
 
@@ -30,7 +40,6 @@ func main() {
 	var targetName string
 
 	if *file != "" {
-		// Scan local file
 		content, err := os.ReadFile(*file)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
@@ -43,7 +52,6 @@ func main() {
 
 	if *url != "" {
 		targetName = *url
-		// Normalize URL
 		if !strings.HasPrefix(*url, "http") {
 			*url = "https://" + *url
 		}
@@ -55,7 +63,6 @@ func main() {
 			os.Exit(1)
 		}
 
-		// Scan inline scripts
 		scripts := fetcher.ExtractInlineScripts(html)
 		fmt.Printf("[*] Found %d inline scripts\n", len(scripts))
 		for _, s := range scripts {
@@ -63,7 +70,6 @@ func main() {
 			allFindings = append(allFindings, findings...)
 		}
 
-		// Scan external scripts
 		scriptURLs := fetcher.ExtractScriptURLs(html, *url)
 		fmt.Printf("[*] Found %d external scripts\n", len(scriptURLs))
 		for _, sURL := range scriptURLs {
@@ -78,10 +84,22 @@ func main() {
 		}
 	}
 
-	// Output results
+	// Static analysis results
 	report.PrintFindings(allFindings, targetName)
 
-	if *output != "" {
+	// Dynamic verification
+	if *verify && *url != "" {
+		fmt.Println("\n[*] Running dynamic verification with headless browser...")
+		fmt.Println("[*] Testing payloads against target...")
+
+		results := verifier.VerifyURL(*url)
+		verifier.PrintResults(results)
+
+		if *output != "" {
+			// Append verification results to JSON output
+			report.OutputVerifiedJSON(allFindings, results, *output)
+		}
+	} else if *output != "" {
 		if err := report.OutputJSON(allFindings, *output); err != nil {
 			fmt.Fprintf(os.Stderr, "Error writing JSON: %v\n", err)
 		} else {
@@ -90,6 +108,6 @@ func main() {
 	}
 
 	if len(allFindings) > 0 {
-		os.Exit(2) // Exit code 2 means vulnerabilities found
+		os.Exit(2)
 	}
 }
