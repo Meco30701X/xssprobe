@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Meco30701X/domxss/crawler"
 	"github.com/Meco30701X/domxss/fetcher"
@@ -34,9 +35,11 @@ func main() {
 	output := flag.String("o", "", "Output results to JSON file")
 	verify := flag.Bool("verify", false, "Dynamic verification (reflected DOM XSS)")
 	stored := flag.Bool("stored", false, "Test for stored DOM XSS")
+	spa := flag.Bool("spa", false, "SPA mode: render page with headless browser")
 	cookie := flag.String("cookie", "", "Cookie string (e.g. \"session=abc; token=xyz\")")
 	waf := flag.String("waf", "", "Target WAF: cloudflare, aws, modsec, generic")
 	threads := flag.Int("threads", 5, "Number of concurrent threads for batch scanning")
+	waitTime := flag.Int("wait", 5, "Wait time in seconds for SPA rendering")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
@@ -93,9 +96,9 @@ func main() {
 
 	// Single URL or batch
 	if len(urls) == 1 {
-		scanURL(urls[0], auth, *waf, *verify, *stored, *output)
+		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output)
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, *verify, *stored, *output, *threads)
+		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads)
 	}
 }
 
@@ -106,6 +109,7 @@ func printUsage() {
 	fmt.Println("  domxss -u https://example.com                          # Static analysis")
 	fmt.Println("  domxss -u URL -verify                                   # Reflected DOM XSS")
 	fmt.Println("  domxss -u URL -stored                                   # Stored DOM XSS")
+	fmt.Println("  domxss -u URL -spa                                      # SPA rendering mode")
 	fmt.Println("  domxss -u URL -verify -waf cloudflare                   # WAF bypass mode")
 	fmt.Println("  domxss -l urls.txt -threads 10                          # Batch scan")
 	fmt.Println("  domxss -u URL -cookie \"session=abc\" -H \"Authorization: Bearer xxx\"")
@@ -118,8 +122,10 @@ func printUsage() {
 	fmt.Println("  -o          Output JSON file")
 	fmt.Println("  -verify     Reflected DOM XSS verification")
 	fmt.Println("  -stored     Stored DOM XSS detection")
+	fmt.Println("  -spa        SPA mode: render page with headless browser")
 	fmt.Println("  -waf        WAF type: cloudflare, aws, modsec, generic")
 	fmt.Println("  -threads    Concurrent threads for batch (default: 5)")
+	fmt.Println("  -wait       Wait time for SPA rendering in seconds (default: 5)")
 	fmt.Println("  -cookie     Cookie string for auth")
 	fmt.Println("  -H          Custom header (repeatable)")
 	fmt.Println()
@@ -165,32 +171,98 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored bool, output string) {
+func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
 
-	// Static analysis
-	fmt.Printf("[*] Fetching %s ...\n", targetURL)
-	html, err := fetcher.FetchPage(targetURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		return
-	}
+	if doSPA {
+		// SPA mode: render with headless browser
+		fmt.Printf("[*] SPA mode: rendering %s with headless browser...\n", targetURL)
 
-	scripts := fetcher.ExtractInlineScripts(html)
-	fmt.Printf("[*] Found %d inline scripts\n", len(scripts))
-	for _, s := range scripts {
-		allFindings = append(allFindings, scanner.ScanJS(s)...)
-	}
-
-	scriptURLs := fetcher.ExtractScriptURLs(html, targetURL)
-	fmt.Printf("[*] Found %d external scripts\n", len(scriptURLs))
-	for _, sURL := range scriptURLs {
-		js, err := fetcher.FetchScript(sURL)
-		if err != nil {
-			continue
+		spaConfig := &fetcher.SPAConfig{
+			WaitTime:   time.Duration(waitTime) * time.Second,
+			ScrollPage: true,
 		}
-		allFindings = append(allFindings, scanner.ScanJS(js)...)
+		if auth != nil {
+			spaConfig.AuthCookies = auth.Cookies
+			spaConfig.Headers = auth.Headers
+		}
+
+		spaResult, err := fetcher.FetchPageSPA(targetURL, spaConfig)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "SPA render error: %v\n", err)
+			return
+		}
+
+		fmt.Printf("[*] Rendered URL: %s\n", spaResult.RenderedURL)
+		fmt.Printf("[*] Found %d inline scripts (rendered DOM)\n", len(spaResult.InlineScripts))
+		fmt.Printf("[*] Found %d external scripts (rendered DOM)\n", len(spaResult.ExternalScripts))
+		if len(spaResult.DynamicScripts) > 0 {
+			fmt.Printf("[*] Found %d dynamically loaded scripts\n", len(spaResult.DynamicScripts))
+		}
+
+		// Scan inline scripts from rendered DOM
+		for _, s := range spaResult.InlineScripts {
+			allFindings = append(allFindings, scanner.ScanJS(s)...)
+		}
+
+		// Scan external scripts
+		for _, sURL := range spaResult.ExternalScripts {
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
+
+		// Scan dynamically loaded scripts
+		for _, sURL := range spaResult.DynamicScripts {
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
+
+		// Detect SPA routes
+		routes := fetcher.ExtractSPARoutes(spaResult.InlineScripts)
+		if len(routes) > 0 {
+			fmt.Printf("[*] Detected %d SPA routes: %v\n", len(routes), routes)
+		}
+
+		// Check if SPA detected
+		if fetcher.IsSPA(spaResult.RenderedHTML) {
+			fmt.Println("[*] SPA framework detected")
+		}
+	} else {
+		// Standard mode: HTTP fetch
+		fmt.Printf("[*] Fetching %s ...\n", targetURL)
+		html, err := fetcher.FetchPage(targetURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+
+		// Auto-detect SPA and suggest -spa flag
+		if fetcher.IsSPA(html) {
+			fmt.Println("[!] SPA detected! Consider using -spa flag for better coverage")
+		}
+
+		scripts := fetcher.ExtractInlineScripts(html)
+		fmt.Printf("[*] Found %d inline scripts\n", len(scripts))
+		for _, s := range scripts {
+			allFindings = append(allFindings, scanner.ScanJS(s)...)
+		}
+
+		scriptURLs := fetcher.ExtractScriptURLs(html, targetURL)
+		fmt.Printf("[*] Found %d external scripts\n", len(scriptURLs))
+		for _, sURL := range scriptURLs {
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
 	}
 
 	report.PrintFindings(allFindings, targetURL)
@@ -236,7 +308,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored bool, output string, concurrency int) {
+func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -259,22 +331,58 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 			var findings []scanner.Finding
 			var verifyResults []verifier.VerifyResult
 
-			// Static analysis
-			html, err := fetcher.FetchPage(u)
-			if err != nil {
-				fmt.Printf("  ⚠ %v\n", err)
-				return
-			}
-
-			for _, s := range fetcher.ExtractInlineScripts(html) {
-				findings = append(findings, scanner.ScanJS(s)...)
-			}
-			for _, sURL := range fetcher.ExtractScriptURLs(html, u) {
-				js, err := fetcher.FetchScript(sURL)
-				if err != nil {
-					continue
+			if doSPA {
+				// SPA mode
+				spaConfig := &fetcher.SPAConfig{
+					WaitTime:   time.Duration(waitTime) * time.Second,
+					ScrollPage: true,
 				}
-				findings = append(findings, scanner.ScanJS(js)...)
+				if auth != nil {
+					spaConfig.AuthCookies = auth.Cookies
+					spaConfig.Headers = auth.Headers
+				}
+
+				spaResult, err := fetcher.FetchPageSPA(u, spaConfig)
+				if err != nil {
+					fmt.Printf("  ⚠ SPA render error: %v\n", err)
+					return
+				}
+
+				for _, s := range spaResult.InlineScripts {
+					findings = append(findings, scanner.ScanJS(s)...)
+				}
+				for _, sURL := range spaResult.ExternalScripts {
+					js, err := fetcher.FetchScript(sURL)
+					if err != nil {
+						continue
+					}
+					findings = append(findings, scanner.ScanJS(js)...)
+				}
+				for _, sURL := range spaResult.DynamicScripts {
+					js, err := fetcher.FetchScript(sURL)
+					if err != nil {
+						continue
+					}
+					findings = append(findings, scanner.ScanJS(js)...)
+				}
+			} else {
+				// Standard mode
+				html, err := fetcher.FetchPage(u)
+				if err != nil {
+					fmt.Printf("  ⚠ %v\n", err)
+					return
+				}
+
+				for _, s := range fetcher.ExtractInlineScripts(html) {
+					findings = append(findings, scanner.ScanJS(s)...)
+				}
+				for _, sURL := range fetcher.ExtractScriptURLs(html, u) {
+					js, err := fetcher.FetchScript(sURL)
+					if err != nil {
+						continue
+					}
+					findings = append(findings, scanner.ScanJS(js)...)
+				}
 			}
 
 			if len(findings) > 0 {
