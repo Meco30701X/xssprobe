@@ -14,6 +14,7 @@ import (
 	"github.com/Meco30701X/domxss/report"
 	"github.com/Meco30701X/domxss/safety"
 	"github.com/Meco30701X/domxss/scanner"
+	"github.com/Meco30701X/domxss/spider"
 	"github.com/Meco30701X/domxss/verifier"
 )
 
@@ -36,6 +37,9 @@ func main() {
 	verify := flag.Bool("verify", false, "Dynamic verification (reflected DOM XSS)")
 	stored := flag.Bool("stored", false, "Test for stored DOM XSS")
 	spa := flag.Bool("spa", false, "SPA mode: render page with headless browser")
+	crawl := flag.Bool("crawl", false, "Auto-crawl site and scan all discovered pages")
+	maxPages := flag.Int("max-pages", 50, "Max pages to crawl (with -crawl)")
+	maxDepth := flag.Int("max-depth", 3, "Max crawl depth (with -crawl)")
 	cookie := flag.String("cookie", "", "Cookie string (e.g. \"session=abc; token=xyz\")")
 	waf := flag.String("waf", "", "Target WAF: cloudflare, aws, modsec, generic")
 	threads := flag.Int("threads", 5, "Number of concurrent threads for batch scanning")
@@ -85,6 +89,34 @@ func main() {
 		urls = append(urls, listURLs...)
 	}
 
+	// Auto-crawl mode
+	if *crawl && len(urls) > 0 {
+		fmt.Printf("[*] Auto-crawling from %s (max-pages=%d, max-depth=%d)\n", urls[0], *maxPages, *maxDepth)
+
+		crawlConfig := spider.DefaultConfig()
+		crawlConfig.MaxPages = *maxPages
+		crawlConfig.MaxDepth = *maxDepth
+		if auth != nil {
+			crawlConfig.AuthCookies = auth.Cookies
+			crawlConfig.Headers = auth.Headers
+		}
+
+		crawler := spider.NewCrawler(crawlConfig)
+		crawlResult := crawler.Crawl(urls[0])
+
+		spider.PrintSummary(crawlResult)
+
+		// Replace URLs with crawled pages
+		urls = spider.ExtractURLs(crawlResult)
+
+		if len(urls) == 0 {
+			fmt.Println("[!] No pages discovered during crawl")
+			return
+		}
+
+		fmt.Printf("[*] Will scan %d discovered pages\n", len(urls))
+	}
+
 	// Scan local file (no batch needed)
 	if *file != "" {
 		scanLocalFile(*file, *output)
@@ -129,6 +161,8 @@ func printUsage() {
 	fmt.Println("  domxss -u URL -stored -safe -confirm                    # Stored XSS (safe payloads)")
 	fmt.Println("  domxss -u URL -stored                                   # Stored XSS (full test)")
 	fmt.Println("  domxss -u URL -spa                                      # SPA rendering mode")
+	fmt.Println("  domxss -u URL -crawl                                    # Auto-crawl and scan all pages")
+	fmt.Println("  domxss -u URL -crawl -max-pages 100 -max-depth 5       # Deep crawl")
 	fmt.Println("  domxss -u URL -verify -waf cloudflare                   # WAF bypass mode")
 	fmt.Println("  domxss -l urls.txt -threads 10                          # Batch scan")
 	fmt.Println("  domxss -u URL -cookie \"session=abc\" -H \"Authorization: Bearer xxx\"")
@@ -142,6 +176,9 @@ func printUsage() {
 	fmt.Println("  -verify     Reflected DOM XSS verification")
 	fmt.Println("  -stored     Stored DOM XSS detection")
 	fmt.Println("  -spa        SPA mode: render page with headless browser")
+	fmt.Println("  -crawl      Auto-crawl site and scan all discovered pages")
+	fmt.Println("  -max-pages  Max pages to crawl (default: 50)")
+	fmt.Println("  -max-depth  Max crawl depth (default: 3)")
 	fmt.Println("  -waf        WAF type: cloudflare, aws, modsec, generic")
 	fmt.Println("  -threads    Concurrent threads for batch (default: 5)")
 	fmt.Println("  -wait       Wait time for SPA rendering in seconds (default: 5)")
