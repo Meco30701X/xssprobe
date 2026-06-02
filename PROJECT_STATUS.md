@@ -48,12 +48,21 @@
 8. **SPA 支持** — `-spa` chromedp 渲染, 自动检测 Vue/React/Angular
 9. **安全机制** — `-dry-run` / `-safe` / `-confirm`
 10. **自动爬虫** — `-crawl` chromedp 站内页面发现
-11. **安全合规机制** (NEW)
+11. **安全合规机制**
     - **域名范围锁定** — `-scope target.com` 限制扫描范围
     - **速率限制** — `-rate N` 令牌桶限速 (默认 2 req/s)
     - **robots.txt** — `-respect-robots` 遵守爬虫规则 (默认开启)
     - **审计日志** — `-audit audit.log` JSON 格式记录所有请求
     - **法律声明** — 首次运行强制确认, `-yes` 跳过 (CI/CD)
+12. **结合分析模式** (NEW) — `-analyze` 静态+动态结合, 降低误报
+13. **过滤函数识别** (NEW) — 识别 7 类过滤/消毒模式:
+    - URL 编码 (encodeURIComponent, encodeURI, escape)
+    - HTML 编码 (htmlEncode, HTML entities)
+    - 消毒库 (DOMPurify, bleach, jsoup)
+    - 安全 DOM 方法 (innerText, textContent)
+    - 正则过滤 (replace patterns)
+    - 白名单验证 (whitelist, allowlist)
+    - CSP 指标 (CSP, nonce, strict-dynamic)
 
 ## 编译状态
 ✅ 编译通过, 无错误
@@ -73,7 +82,12 @@
 ./domxss -u URL -spa                     # SPA 渲染模式
 ./domxss -u URL -crawl -max-pages 100    # 自动爬虫扫描
 
-# 合规扫描 (推荐)
+# 结合分析 (推荐, 降低误报)
+./domxss -u URL -analyze                 # 静态+动态结合分析
+./domxss -u URL -analyze -max-verify 5   # 限制动态验证数量
+./domxss -u URL -analyze -skip-filtered  # 跳过已过滤的发现
+
+# 合规扫描
 ./domxss -u URL -scope target.com -rate 2 -audit audit.log
 ./domxss -u URL -scope target.com -respect-robots -yes  # CI/CD
 
