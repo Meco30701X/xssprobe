@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Meco30701X/domxss/compliance"
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/payloads"
 	"github.com/Meco30701X/domxss/report"
@@ -47,9 +48,20 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Dry-run: detect inputs but don't submit (safest)")
 	safePayloads := flag.Bool("safe", false, "Use only harmless canary payloads")
 	confirm := flag.Bool("confirm", false, "Ask for confirmation before each submission")
+	// Compliance flags
+	scope := flag.String("scope", "", "Restrict scanning to this domain (e.g. target.com)")
+	rateLimit := flag.Int("rate", 2, "Max requests per second (rate limiting)")
+	auditLog := flag.String("audit", "", "Audit log file path (JSON lines)")
+	respectRobots := flag.Bool("respect-robots", true, "Respect robots.txt rules")
+	skipLegal := flag.Bool("yes", false, "Skip legal confirmation (for CI/CD automation)")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
+
+	// Legal confirmation
+	if !compliance.ConfirmLegalUsage(*skipLegal) {
+		os.Exit(0)
+	}
 
 	if *url == "" && *urlList == "" && *file == "" {
 		printUsage()
@@ -79,6 +91,13 @@ func main() {
 			u = "https://" + u
 		}
 		urls = append(urls, u)
+		// Auto-detect scope from target URL if not specified
+		if *scope == "" {
+			*scope = compliance.ExtractDomain(u)
+			if *scope != "" {
+				fmt.Printf("[*] Auto-detected scope: %s\n", *scope)
+			}
+		}
 	}
 	if *urlList != "" {
 		listURLs, err := readURLFile(*urlList)
@@ -89,6 +108,26 @@ func main() {
 		urls = append(urls, listURLs...)
 	}
 
+	// Initialize compliance context
+	complianceCfg := compliance.ComplianceConfig{
+		Scope:         *scope,
+		RateLimit:     *rateLimit,
+		AuditLogPath:  *auditLog,
+		RespectRobots: *respectRobots,
+	}
+	complianceCtx, err := compliance.NewCompliance(complianceCfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Compliance init error: %v\n", err)
+		os.Exit(1)
+	}
+	defer complianceCtx.Close()
+
+	fmt.Printf("[*] Compliance: scope=%s, rate=%d/s, robots=%v\n",
+		*scope, *rateLimit, *respectRobots)
+	if *auditLog != "" {
+		fmt.Printf("[*] Audit log: %s\n", *auditLog)
+	}
+
 	// Auto-crawl mode
 	if *crawl && len(urls) > 0 {
 		fmt.Printf("[*] Auto-crawling from %s (max-pages=%d, max-depth=%d)\n", urls[0], *maxPages, *maxDepth)
@@ -96,6 +135,7 @@ func main() {
 		crawlConfig := spider.DefaultConfig()
 		crawlConfig.MaxPages = *maxPages
 		crawlConfig.MaxDepth = *maxDepth
+		crawlConfig.Compliance = complianceCtx
 		if auth != nil {
 			crawlConfig.AuthCookies = auth.Cookies
 			crawlConfig.Headers = auth.Headers
@@ -145,9 +185,9 @@ func main() {
 
 	// Single URL or batch
 	if len(urls) == 1 {
-		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode)
+		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx)
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode)
+		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx)
 	}
 }
 
@@ -189,6 +229,13 @@ func printUsage() {
 	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (safest)")
 	fmt.Println("  -safe       Use only harmless canary payloads")
 	fmt.Println("  -confirm    Ask for confirmation before each submission")
+	fmt.Println()
+	fmt.Println("Compliance Flags:")
+	fmt.Println("  -scope        Restrict scanning to this domain (e.g. target.com)")
+	fmt.Println("  -rate         Max requests per second (default: 2)")
+	fmt.Println("  -audit        Audit log file path (JSON lines)")
+	fmt.Println("  -respect-robots  Respect robots.txt rules (default: true)")
+	fmt.Println("  -yes          Skip legal confirmation (for CI/CD)")
 	fmt.Println()
 	fmt.Printf("Payload library: %d payloads available\n", payloads.Count())
 }
@@ -232,9 +279,15 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode) {
+func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
+
+	// Compliance check for target URL
+	if err := cc.CheckURL(targetURL, "scan"); err != nil {
+		fmt.Printf("[!] Compliance blocked: %v\n", err)
+		return
+	}
 
 	if doSPA {
 		// SPA mode: render with headless browser
@@ -267,19 +320,27 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 			allFindings = append(allFindings, scanner.ScanJS(s)...)
 		}
 
-		// Scan external scripts
+		// Scan external scripts (with compliance check)
 		for _, sURL := range spaResult.ExternalScripts {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
 			js, err := fetcher.FetchScript(sURL)
 			if err != nil {
+				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
 			allFindings = append(allFindings, scanner.ScanJS(js)...)
 		}
 
-		// Scan dynamically loaded scripts
+		// Scan dynamically loaded scripts (with compliance check)
 		for _, sURL := range spaResult.DynamicScripts {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
 			js, err := fetcher.FetchScript(sURL)
 			if err != nil {
+				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
 			allFindings = append(allFindings, scanner.ScanJS(js)...)
@@ -318,8 +379,12 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 		scriptURLs := fetcher.ExtractScriptURLs(html, targetURL)
 		fmt.Printf("[*] Found %d external scripts\n", len(scriptURLs))
 		for _, sURL := range scriptURLs {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
 			js, err := fetcher.FetchScript(sURL)
 			if err != nil {
+				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
 			allFindings = append(allFindings, scanner.ScanJS(js)...)
@@ -355,7 +420,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode) {
+func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -374,6 +439,12 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 			defer func() { <-sem }()
 
 			fmt.Printf("\n[*] [%d/%d] Scanning %s\n", scanned+1, len(urls), u)
+
+			// Compliance check for target URL
+			if err := cc.CheckURL(u, "scan"); err != nil {
+				fmt.Printf("  ⚠ Compliance blocked: %v\n", err)
+				return
+			}
 
 			var findings []scanner.Finding
 			var verifyResults []verifier.VerifyResult
@@ -399,15 +470,23 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 					findings = append(findings, scanner.ScanJS(s)...)
 				}
 				for _, sURL := range spaResult.ExternalScripts {
+					if err := cc.CheckURL(sURL, "script"); err != nil {
+						continue
+					}
 					js, err := fetcher.FetchScript(sURL)
 					if err != nil {
+						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
 					findings = append(findings, scanner.ScanJS(js)...)
 				}
 				for _, sURL := range spaResult.DynamicScripts {
+					if err := cc.CheckURL(sURL, "script"); err != nil {
+						continue
+					}
 					js, err := fetcher.FetchScript(sURL)
 					if err != nil {
+						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
 					findings = append(findings, scanner.ScanJS(js)...)
@@ -424,8 +503,12 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 					findings = append(findings, scanner.ScanJS(s)...)
 				}
 				for _, sURL := range fetcher.ExtractScriptURLs(html, u) {
+					if err := cc.CheckURL(sURL, "script"); err != nil {
+						continue
+					}
 					js, err := fetcher.FetchScript(sURL)
 					if err != nil {
+						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
 					findings = append(findings, scanner.ScanJS(js)...)

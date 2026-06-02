@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Meco30701X/domxss/compliance"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
@@ -20,6 +21,7 @@ type Config struct {
 	SameDomain  bool          // Only crawl same domain
 	AuthCookies []string
 	Headers     map[string]string
+	Compliance  *compliance.ComplianceContext // Compliance checks
 }
 
 // DefaultConfig returns default crawler config
@@ -102,6 +104,16 @@ func (c *Crawler) crawlPage(pageURL string, depth int) {
 	// Check limits
 	if depth > c.config.MaxDepth {
 		return
+	}
+
+	// Compliance check
+	if c.config.Compliance != nil {
+		if err := c.config.Compliance.CheckURL(pageURL, "spider"); err != nil {
+			c.mu.Lock()
+			c.errors = append(c.errors, fmt.Sprintf("compliance: %s: %v", pageURL, err))
+			c.mu.Unlock()
+			return
+		}
 	}
 
 	c.mu.Lock()
