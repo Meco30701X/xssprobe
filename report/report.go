@@ -31,6 +31,14 @@ func PrintFindings(findings []scanner.Finding, sourceURL string) {
 		fmt.Printf("  #%d [%s%s%s]\n", i+1, color, f.Severity, reset)
 		fmt.Printf("    Source: %s → Sink: %s\n", f.Source, f.Sink)
 		fmt.Printf("    Line %d: %s\n", f.Line, f.Code)
+
+		// Show filter information if detected
+		if f.Filtered {
+			fmt.Printf("    ⚠️  Filtering detected: %s\n", f.FilterType)
+		}
+		if f.Confidence != "" {
+			fmt.Printf("    Confidence: %s\n", f.Confidence)
+		}
 		fmt.Println()
 	}
 }

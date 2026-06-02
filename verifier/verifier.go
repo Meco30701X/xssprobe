@@ -519,6 +519,101 @@ func testStoredInput(ctx context.Context, baseURL string, input inputInfo, paylo
 	return result
 }
 
+// TestHashOnly tests only hash-based XSS (for analyzer)
+func TestHashOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
+	payloads := getTestPayloads(waf)
+	if len(payloads) == 0 {
+		return VerifyResult{Source: "hash", Detail: "no payloads available"}
+	}
+
+	// Use first canary payload
+	payload := payloads[0]
+	return testHash(targetURL, payload, auth)
+}
+
+// TestSearchOnly tests only search parameter XSS (for analyzer)
+func TestSearchOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
+	payloads := getTestPayloads(waf)
+	if len(payloads) == 0 {
+		return VerifyResult{Source: "search", Detail: "no payloads available"}
+	}
+
+	payload := payloads[0]
+	params := []string{"q", "search", "id", "page", "input", "name", "s"}
+
+	for _, param := range params {
+		r := testSearchParam(targetURL, param, payload, auth)
+		if r.Triggered {
+			return r
+		}
+	}
+
+	return VerifyResult{Source: "search", Payload: payload, Detail: "not triggered"}
+}
+
+// VerifyPostMessage tests postMessage-based XSS
+func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string) VerifyResult {
+	result := VerifyResult{Source: "postMessage", Payload: Canary}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	taskCtx, taskCancel := newChromeContext(ctx, auth)
+	defer taskCancel()
+
+	// Inject postMessage listener and trigger
+	jsPostMessage := `
+		(function() {
+			var triggered = false;
+			window.addEventListener('message', function(e) {
+				try {
+					// Try to execute the message data
+					var data = e.data;
+					if (typeof data === 'string' && data.indexOf('` + Canary + `') !== -1) {
+						window.xssTriggered = true;
+						triggered = true;
+					}
+				} catch(ex) {}
+			});
+
+			// Send message to self
+			var payload = '<img src=x onerror="window.xssTriggered=true">';
+			window.postMessage(payload, '*');
+
+			return triggered;
+		})()
+	`
+
+	var domContent string
+	var jsTriggered bool
+
+	err := chromedp.Run(taskCtx,
+		chromedp.Navigate(targetURL),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(jsPostMessage, nil),
+		chromedp.Sleep(1*time.Second),
+		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
+		chromedp.InnerHTML("html", &domContent),
+	)
+
+	if err != nil {
+		result.Detail = "error: " + err.Error()
+		return result
+	}
+
+	if jsTriggered {
+		result.Triggered = true
+		result.Detail = "postMessage XSS confirmed"
+	} else if strings.Contains(domContent, Canary) {
+		result.Triggered = true
+		result.Detail = "Canary found in DOM via postMessage"
+	} else {
+		result.Detail = "postMessage not triggered"
+	}
+
+	return result
+}
+
 // PrintResults prints verification results
 func PrintResults(results []VerifyResult) {
 	confirmed := 0

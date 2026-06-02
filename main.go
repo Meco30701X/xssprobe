@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Meco30701X/domxss/analyzer"
 	"github.com/Meco30701X/domxss/compliance"
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/payloads"
@@ -48,6 +49,10 @@ func main() {
 	dryRun := flag.Bool("dry-run", false, "Dry-run: detect inputs but don't submit (safest)")
 	safePayloads := flag.Bool("safe", false, "Use only harmless canary payloads")
 	confirm := flag.Bool("confirm", false, "Ask for confirmation before each submission")
+	// Combined analysis flag
+	analyze := flag.Bool("analyze", false, "Combined static+dynamic analysis (lower false positives)")
+	maxVerify := flag.Int("max-verify", 10, "Max findings to verify dynamically (with -analyze)")
+	skipFiltered := flag.Bool("skip-filtered", false, "Skip findings with detected filtering (with -analyze)")
 	// Compliance flags
 	scope := flag.String("scope", "", "Restrict scanning to this domain (e.g. target.com)")
 	rateLimit := flag.Int("rate", 2, "Max requests per second (rate limiting)")
@@ -185,7 +190,11 @@ func main() {
 
 	// Single URL or batch
 	if len(urls) == 1 {
-		scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx)
+		if *analyze {
+			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
+		} else {
+			scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx)
+		}
 	} else if len(urls) > 1 {
 		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx)
 	}
@@ -196,6 +205,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  domxss -u https://example.com                          # Static analysis")
+	fmt.Println("  domxss -u URL -analyze                                  # Combined analysis (recommended)")
 	fmt.Println("  domxss -u URL -verify                                   # Reflected DOM XSS")
 	fmt.Println("  domxss -u URL -stored -dry-run                          # Stored XSS (safe, no submit)")
 	fmt.Println("  domxss -u URL -stored -safe -confirm                    # Stored XSS (safe payloads)")
@@ -229,6 +239,11 @@ func printUsage() {
 	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (safest)")
 	fmt.Println("  -safe       Use only harmless canary payloads")
 	fmt.Println("  -confirm    Ask for confirmation before each submission")
+	fmt.Println()
+	fmt.Println("Analysis Flags:")
+	fmt.Println("  -analyze       Combined static+dynamic analysis (lower false positives)")
+	fmt.Println("  -max-verify    Max findings to verify dynamically (default: 10)")
+	fmt.Println("  -skip-filtered Skip findings with detected filtering")
 	fmt.Println()
 	fmt.Println("Compliance Flags:")
 	fmt.Println("  -scope        Restrict scanning to this domain (e.g. target.com)")
@@ -416,6 +431,100 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 		} else {
 			report.OutputJSON(allFindings, output)
 		}
+		fmt.Printf("\n[*] Results saved to %s\n", output)
+	}
+}
+
+func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, maxVerify int, skipFiltered bool, cc *compliance.ComplianceContext) {
+	// Compliance check
+	if err := cc.CheckURL(targetURL, "analyze"); err != nil {
+		fmt.Printf("[!] Compliance blocked: %v\n", err)
+		return
+	}
+
+	var allFindings []scanner.Finding
+
+	// Phase 1: Static Analysis
+	if doSPA {
+		fmt.Printf("[*] SPA mode: rendering %s with headless browser...\n", targetURL)
+		spaConfig := &fetcher.SPAConfig{
+			WaitTime:   time.Duration(waitTime) * time.Second,
+			ScrollPage: true,
+		}
+		if auth != nil {
+			spaConfig.AuthCookies = auth.Cookies
+			spaConfig.Headers = auth.Headers
+		}
+
+		spaResult, err := fetcher.FetchPageSPA(targetURL, spaConfig)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "SPA render error: %v\n", err)
+			return
+		}
+
+		for _, s := range spaResult.InlineScripts {
+			allFindings = append(allFindings, scanner.ScanJS(s)...)
+		}
+		for _, sURL := range spaResult.ExternalScripts {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
+		for _, sURL := range spaResult.DynamicScripts {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
+	} else {
+		fmt.Printf("[*] Fetching %s ...\n", targetURL)
+		html, err := fetcher.FetchPage(targetURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			return
+		}
+
+		scripts := fetcher.ExtractInlineScripts(html)
+		for _, s := range scripts {
+			allFindings = append(allFindings, scanner.ScanJS(s)...)
+		}
+
+		scriptURLs := fetcher.ExtractScriptURLs(html, targetURL)
+		for _, sURL := range scriptURLs {
+			if err := cc.CheckURL(sURL, "script"); err != nil {
+				continue
+			}
+			js, err := fetcher.FetchScript(sURL)
+			if err != nil {
+				continue
+			}
+			allFindings = append(allFindings, scanner.ScanJS(js)...)
+		}
+	}
+
+	// Phase 2: Combined Analysis with Dynamic Verification
+	config := &analyzer.AnalysisConfig{
+		DoVerify:     true,
+		WAF:          waf,
+		MaxVerify:    maxVerify,
+		SkipFiltered: skipFiltered,
+	}
+
+	results := analyzer.AnalyzeFindings(targetURL, allFindings, auth, config)
+	analyzer.PrintAnalysisResults(results)
+
+	// Save detailed report
+	if output != "" {
+		analyzer.PrintDetailedReport(results)
 		fmt.Printf("\n[*] Results saved to %s\n", output)
 	}
 }
