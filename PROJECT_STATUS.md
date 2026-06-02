@@ -10,7 +10,7 @@
 ## 项目结构
 ```
 /home/domxss/
-├── main.go              # CLI 入口 (15KB)
+├── main.go              # CLI 入口
 ├── scanner/
 │   └── scanner.go       # 静态分析: Source/Sink 模式匹配 + 跨行污点追踪
 ├── fetcher/
@@ -18,8 +18,13 @@
 │   └── spa.go           # chromedp 渲染 SPA 页面、提取动态脚本
 ├── verifier/
 │   └── verifier.go      # 动态验证: 反射型 + 存储型 XSS (chromedp)
-├── crawler/
-│   └── crawler.go       # 页面输入点检测 (表单、textarea、contenteditable)
+├── compliance/          # 安全合规模块 (NEW)
+│   ├── compliance.go    # 合规上下文主模块
+│   ├── scope.go         # 域名范围锁定
+│   ├── ratelimit.go     # 令牌桶限速器
+│   ├── robots.go        # robots.txt 解析
+│   ├── audit.go         # 审计日志 (JSON)
+│   └── legal.go         # 合法使用确认
 ├── spider/
 │   └── spider.go        # 自动爬虫 (发现站内页面)
 ├── payloads/
@@ -42,45 +47,16 @@
 7. **批量扫描** — `-l urls.txt -threads N`
 8. **SPA 支持** — `-spa` chromedp 渲染, 自动检测 Vue/React/Angular
 9. **安全机制** — `-dry-run` / `-safe` / `-confirm`
+10. **自动爬虫** — `-crawl` chromedp 站内页面发现
+11. **安全合规机制** (NEW)
+    - **域名范围锁定** — `-scope target.com` 限制扫描范围
+    - **速率限制** — `-rate N` 令牌桶限速 (默认 2 req/s)
+    - **robots.txt** — `-respect-robots` 遵守爬虫规则 (默认开启)
+    - **审计日志** — `-audit audit.log` JSON 格式记录所有请求
+    - **法律声明** — 首次运行强制确认, `-yes` 跳过 (CI/CD)
 
-## ⚠️ 当前编译错误
-
-**问题**: `spider/spider.go` 第7行导入了 `"regexp"` 但未使用。
-
-**修复方法**: 删除 `spider/spider.go` 第7行的 `"regexp"` 导入。
-
-```go
-// 当前 (错误):
-import (
-    "context"
-    "fmt"
-    "net/url"
-    "regexp"     // ← 删除这行
-    "strings"
-    ...
-)
-
-// 修复后:
-import (
-    "context"
-    "fmt"
-    "net/url"
-    "strings"
-    ...
-)
-```
-
-## 未提交的变更
-- `main.go` 已修改 (添加了 spider 集成、-crawl/-max-pages/-max-depth 参数)
-- `spider/` 目录未跟踪 (新的自动爬虫模块)
-
-修复编译错误后需要:
-```bash
-cd /home/domxss
-git add -A
-git commit -m "feat: auto-crawler for site-wide scanning"
-git push
-```
+## 编译状态
+✅ 编译通过, 无错误
 
 ## 环境注意事项
 - Go 在 `/usr/local/go/bin/go`，需要 `export PATH=/usr/local/go/bin:$PATH`
@@ -90,12 +66,18 @@ git push
 
 ## 功能用法速查
 ```bash
+# 基础扫描
 ./domxss -u URL                          # 静态分析
 ./domxss -u URL -verify                  # 反射型验证
 ./domxss -u URL -stored -dry-run         # 存储型 (最安全)
-./domxss -u URL -stored -safe -confirm   # 存储型 (安全payload+确认)
 ./domxss -u URL -spa                     # SPA 渲染模式
 ./domxss -u URL -crawl -max-pages 100    # 自动爬虫扫描
+
+# 合规扫描 (推荐)
+./domxss -u URL -scope target.com -rate 2 -audit audit.log
+./domxss -u URL -scope target.com -respect-robots -yes  # CI/CD
+
+# 高级用法
 ./domxss -u URL -verify -waf cloudflare  # WAF 绕过
 ./domxss -l urls.txt -threads 10         # 批量扫描
 ./domxss -u URL -cookie "k=v" -H "K: V" # 带认证
@@ -103,8 +85,8 @@ git push
 ```
 
 ## 下一步建议
-- 修复 spider.go 编译错误并提交
 - HTML 报告输出
 - README 文档 (GitHub 展示)
 - 单元测试
 - Docker 镜像
+- CI/CD 集成示例
