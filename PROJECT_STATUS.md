@@ -54,8 +54,8 @@
     - **robots.txt** — `-respect-robots` 遵守爬虫规则 (默认开启)
     - **审计日志** — `-audit audit.log` JSON 格式记录所有请求
     - **法律声明** — 首次运行强制确认, `-yes` 跳过 (CI/CD)
-12. **结合分析模式** (NEW) — `-analyze` 静态+动态结合, 降低误报
-13. **过滤函数识别** (NEW) — 识别 7 类过滤/消毒模式:
+12. **结合分析模式** — `-analyze` 静态+动态结合, 降低误报
+13. **过滤函数识别** — 识别 7 类过滤/消毒模式:
     - URL 编码 (encodeURIComponent, encodeURI, escape)
     - HTML 编码 (htmlEncode, HTML entities)
     - 消毒库 (DOMPurify, bleach, jsoup)
@@ -63,6 +63,12 @@
     - 正则过滤 (replace patterns)
     - 白名单验证 (whitelist, allowlist)
     - CSP 指标 (CSP, nonce, strict-dynamic)
+14. **参数自动发现** (NEW) — `-mine` 自动发现测试参数:
+    - HTML 表单 (input/select/textarea name)
+    - URL 参数 (链接中的查询参数)
+    - JavaScript (URLSearchParams, getParameter)
+    - 100+ 常用参数名 wordlist
+    - `-param "id,name"` 手动指定参数
 
 ## 编译状态
 ✅ 编译通过, 无错误
@@ -86,6 +92,11 @@
 ./domxss -u URL -analyze                 # 静态+动态结合分析
 ./domxss -u URL -analyze -max-verify 5   # 限制动态验证数量
 ./domxss -u URL -analyze -skip-filtered  # 跳过已过滤的发现
+
+# 参数发现 + 验证
+./domxss -u URL -verify                  # 自动发现参数 + 验证
+./domxss -u URL -verify -param "id,name" # 手动指定参数
+./domxss -u URL -verify -wordlist        # 加上常用参数 wordlist
 
 # 合规扫描
 ./domxss -u URL -scope target.com -rate 2 -audit audit.log
