@@ -12,6 +12,7 @@ import (
 	"github.com/Meco30701X/domxss/analyzer"
 	"github.com/Meco30701X/domxss/compliance"
 	"github.com/Meco30701X/domxss/fetcher"
+	"github.com/Meco30701X/domxss/miner"
 	"github.com/Meco30701X/domxss/payloads"
 	"github.com/Meco30701X/domxss/report"
 	"github.com/Meco30701X/domxss/safety"
@@ -53,6 +54,10 @@ func main() {
 	analyze := flag.Bool("analyze", false, "Combined static+dynamic analysis (lower false positives)")
 	maxVerify := flag.Int("max-verify", 10, "Max findings to verify dynamically (with -analyze)")
 	skipFiltered := flag.Bool("skip-filtered", false, "Skip findings with detected filtering (with -analyze)")
+	// Parameter mining flags
+	paramFlag := flag.String("param", "", "Comma-separated parameter names to test (e.g. \"id,name,email\")")
+	mineParams := flag.Bool("mine", true, "Auto-discover parameters from HTML/JS (default: true)")
+	useWordlist := flag.Bool("wordlist", false, "Add common parameter wordlist to discovered params")
 	// Compliance flags
 	scope := flag.String("scope", "", "Restrict scanning to this domain (e.g. target.com)")
 	rateLimit := flag.Int("rate", 2, "Max requests per second (rate limiting)")
@@ -188,15 +193,28 @@ func main() {
 		fmt.Println("[*] Stored XSS: using safe payloads with confirmation (use -dry-run for safest mode)")
 	}
 
+	// Parse manual parameters
+	var manualParams []string
+	if *paramFlag != "" {
+		for _, p := range strings.Split(*paramFlag, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				manualParams = append(manualParams, p)
+			}
+		}
+	}
+
 	// Single URL or batch
 	if len(urls) == 1 {
 		if *analyze {
 			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
 		} else {
-			scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx)
+			scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx,
+				*mineParams, *useWordlist, manualParams)
 		}
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx)
+		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx,
+			*mineParams, *useWordlist, manualParams)
 	}
 }
 
@@ -244,6 +262,11 @@ func printUsage() {
 	fmt.Println("  -analyze       Combined static+dynamic analysis (lower false positives)")
 	fmt.Println("  -max-verify    Max findings to verify dynamically (default: 10)")
 	fmt.Println("  -skip-filtered Skip findings with detected filtering")
+	fmt.Println()
+	fmt.Println("Parameter Mining Flags:")
+	fmt.Println("  -param         Comma-separated parameter names to test (e.g. \"id,name,email\")")
+	fmt.Println("  -mine          Auto-discover parameters from HTML/JS (default: true)")
+	fmt.Println("  -wordlist      Add common parameter wordlist to discovered params")
 	fmt.Println()
 	fmt.Println("Compliance Flags:")
 	fmt.Println("  -scope        Restrict scanning to this domain (e.g. target.com)")
@@ -294,9 +317,11 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext) {
+func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+	doMine, useWordlist bool, manualParams []string) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
+	var pageHTML string // store HTML for parameter mining
 
 	// Compliance check for target URL
 	if err := cc.CheckURL(targetURL, "scan"); err != nil {
@@ -379,6 +404,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return
 		}
+		pageHTML = html // save for parameter mining
 
 		// Auto-detect SPA and suggest -spa flag
 		if fetcher.IsSPA(html) {
@@ -408,12 +434,47 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 
 	report.PrintFindings(allFindings, targetURL)
 
+	// Parameter Discovery
+	var discoveredParams []miner.DiscoveredParam
+	if doMine && pageHTML != "" {
+		fmt.Println("\n[*] Parameter discovery...")
+		discoveredParams = miner.MineParamsFromHTML(pageHTML)
+	}
+
+	// Merge with manual params
+	if len(manualParams) > 0 {
+		discoveredParams = miner.MergeParams(discoveredParams, manualParams)
+	}
+
+	// Add wordlist if requested
+	if useWordlist {
+		discoveredParams = miner.AddWordlistParams(discoveredParams, miner.GetDefaultWordlist())
+	}
+
+	// Print discovered parameters
+	if doVerify {
+		paramNames := miner.ParamNames(discoveredParams)
+		if len(paramNames) > 0 {
+			fmt.Printf("\n[*] Discovered %d parameters:\n", len(discoveredParams))
+			miner.PrintDiscoveredParams(discoveredParams)
+		}
+	}
+
 	// Reflected DOM XSS
 	if doVerify {
 		fmt.Println("\n[*] Reflected DOM XSS verification...")
-		results := verifier.VerifyURL(targetURL, auth, waf)
-		allVerifyResults = append(allVerifyResults, results...)
-		verifier.PrintResults(results)
+		paramNames := miner.ParamNames(discoveredParams)
+		if len(paramNames) > 0 {
+			fmt.Printf("[*] Testing %d parameters...\n", len(paramNames))
+			results := verifier.VerifyURLWithParams(targetURL, auth, waf, paramNames)
+			allVerifyResults = append(allVerifyResults, results...)
+			verifier.PrintResults(results)
+		} else {
+			// Fallback to default params
+			results := verifier.VerifyURL(targetURL, auth, waf)
+			allVerifyResults = append(allVerifyResults, results...)
+			verifier.PrintResults(results)
+		}
 	}
 
 	// Stored DOM XSS
@@ -529,7 +590,8 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext) {
+func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+	doMine, useWordlist bool, manualParams []string) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -630,7 +692,29 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 
 			// Dynamic verification
 			if doVerify {
-				results := verifier.VerifyURL(u, auth, waf)
+				// Parameter discovery for this URL
+				var urlParams []string
+				if doMine && !doSPA {
+					html, err := fetcher.FetchPage(u)
+					if err == nil {
+						discovered := miner.MineParamsFromHTML(html)
+						if len(manualParams) > 0 {
+							discovered = miner.MergeParams(discovered, manualParams)
+						}
+						if useWordlist {
+							discovered = miner.AddWordlistParams(discovered, miner.GetDefaultWordlist())
+						}
+						urlParams = miner.ParamNames(discovered)
+					}
+				}
+
+				var results []verifier.VerifyResult
+				if len(urlParams) > 0 {
+					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
+					results = verifier.VerifyURLWithParams(u, auth, waf, urlParams)
+				} else {
+					results = verifier.VerifyURL(u, auth, waf)
+				}
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {

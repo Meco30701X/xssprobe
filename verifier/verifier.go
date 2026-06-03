@@ -115,14 +115,27 @@ func extractDomain(ctx context.Context) string {
 
 // VerifyURL tests a URL for reflected DOM XSS
 func VerifyURL(targetURL string, auth *AuthConfig, waf string) []VerifyResult {
+	// Default parameters for backward compatibility
+	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams)
+}
+
+// VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string) []VerifyResult {
 	var results []VerifyResult
 	testPayloads := getTestPayloads(waf)
 
+	if len(params) == 0 {
+		params = []string{"q", "search", "id", "page", "input", "name", "s"}
+	}
+
 	for _, payload := range testPayloads {
+		// Test hash fragment
 		r := testHash(targetURL, payload, auth)
 		results = append(results, r)
 
-		for _, param := range []string{"q", "search", "id", "page", "input", "name", "s"} {
+		// Test each parameter
+		for _, param := range params {
 			r = testSearchParam(targetURL, param, payload, auth)
 			results = append(results, r)
 		}
