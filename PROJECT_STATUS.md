@@ -69,11 +69,15 @@
     - JavaScript (URLSearchParams, getParameter)
     - 100+ 常用参数名 wordlist
     - `-param "id,name"` 手动指定参数
-15. **WAF 自动识别** (NEW) — `-auto-waf` 自动检测 WAF:
+15. **WAF 自动识别** — `-auto-waf` 自动检测 WAF:
     - 支持 7 种 WAF: Cloudflare, AWS, ModSecurity, Akamai, Imperva, Sucuri, F5
     - 通过响应头、响应体、状态码指纹识别
     - 置信度评估 (low/medium/high)
     - 自动选择对应的绕过 payload
+16. **Stdin 管道支持** (BETA) — 从 stdin 读取 URL:
+    - `cat urls.txt | domxss -verify`
+    - 支持工具链集成
+    - 实验性功能，显示 BETA 提示
 
 ## 编译状态
 ✅ 编译通过, 无错误
@@ -107,6 +111,10 @@
 ./domxss -u URL -verify                  # 自动检测 WAF + 选择绕过 payload
 ./domxss -u URL -verify -waf cloudflare  # 手动指定 WAF
 ./domxss -u URL -verify -auto-waf=false  # 关闭 WAF 自动检测
+
+# Stdin 管道 (BETA)
+cat urls.txt | domxss -verify            # 从 stdin 读取 URL
+echo https://target.com | domxss         # 单个 URL
 
 # 合规扫描
 ./domxss -u URL -scope target.com -rate 2 -audit audit.log
