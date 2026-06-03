@@ -19,6 +19,7 @@ import (
 	"github.com/Meco30701X/domxss/scanner"
 	"github.com/Meco30701X/domxss/spider"
 	"github.com/Meco30701X/domxss/verifier"
+	wafpkg "github.com/Meco30701X/domxss/waf"
 )
 
 type headerFlags map[string]string
@@ -45,6 +46,7 @@ func main() {
 	maxDepth := flag.Int("max-depth", 3, "Max crawl depth (with -crawl)")
 	cookie := flag.String("cookie", "", "Cookie string (e.g. \"session=abc; token=xyz\")")
 	waf := flag.String("waf", "", "Target WAF: cloudflare, aws, modsec, generic")
+	autoWAF := flag.Bool("auto-waf", true, "Auto-detect WAF (default: true)")
 	threads := flag.Int("threads", 5, "Number of concurrent threads for batch scanning")
 	waitTime := flag.Int("wait", 5, "Wait time in seconds for SPA rendering")
 	dryRun := flag.Bool("dry-run", false, "Dry-run: detect inputs but don't submit (safest)")
@@ -210,11 +212,11 @@ func main() {
 			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
 		} else {
 			scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx,
-				*mineParams, *useWordlist, manualParams)
+				*mineParams, *useWordlist, manualParams, *autoWAF)
 		}
 	} else if len(urls) > 1 {
 		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx,
-			*mineParams, *useWordlist, manualParams)
+			*mineParams, *useWordlist, manualParams, *autoWAF)
 	}
 }
 
@@ -248,6 +250,7 @@ func printUsage() {
 	fmt.Println("  -max-pages  Max pages to crawl (default: 50)")
 	fmt.Println("  -max-depth  Max crawl depth (default: 3)")
 	fmt.Println("  -waf        WAF type: cloudflare, aws, modsec, generic")
+	fmt.Println("  -auto-waf   Auto-detect WAF (default: true)")
 	fmt.Println("  -threads    Concurrent threads for batch (default: 5)")
 	fmt.Println("  -wait       Wait time for SPA rendering in seconds (default: 5)")
 	fmt.Println("  -cookie     Cookie string for auth")
@@ -317,8 +320,8 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string) {
+func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+	doMine, useWordlist bool, manualParams []string, autoWAF bool) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
 	var pageHTML string // store HTML for parameter mining
@@ -434,6 +437,25 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 
 	report.PrintFindings(allFindings, targetURL)
 
+	// WAF Auto-Detection
+	if autoWAF && wafType == "" && doVerify {
+		fmt.Println("\n[*] WAF detection...")
+		cookies := []string{}
+		customHeaders := map[string]string{}
+		if auth != nil {
+			cookies = auth.Cookies
+			customHeaders = auth.Headers
+		}
+		wafResult := wafpkg.DetectWAF(targetURL, cookies, customHeaders)
+		wafpkg.PrintWAFResult(wafResult)
+		if wafResult.Detected {
+			wafType = wafpkg.GetRecommendedWAF(wafResult.Name)
+			if wafType != "" {
+				fmt.Printf("[*] Using WAF bypass payloads for: %s\n", wafType)
+			}
+		}
+	}
+
 	// Parameter Discovery
 	var discoveredParams []miner.DiscoveredParam
 	if doMine && pageHTML != "" {
@@ -466,12 +488,12 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 		paramNames := miner.ParamNames(discoveredParams)
 		if len(paramNames) > 0 {
 			fmt.Printf("[*] Testing %d parameters...\n", len(paramNames))
-			results := verifier.VerifyURLWithParams(targetURL, auth, waf, paramNames)
+			results := verifier.VerifyURLWithParams(targetURL, auth, wafType, paramNames)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		} else {
 			// Fallback to default params
-			results := verifier.VerifyURL(targetURL, auth, waf)
+			results := verifier.VerifyURL(targetURL, auth, wafType)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		}
@@ -480,7 +502,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, waf string, doVerify, 
 	// Stored DOM XSS
 	if doStored {
 		fmt.Println("\n[*] Stored DOM XSS detection...")
-		results, _ := verifier.VerifyStoredXSS(targetURL, auth, waf, safetyMode)
+		results, _ := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode)
 		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
 	}
@@ -590,8 +612,8 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string) {
+func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+	doMine, useWordlist bool, manualParams []string, autoWAF bool) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -690,8 +712,27 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 				fmt.Printf("  [!] %d static findings\n", len(findings))
 			}
 
+			// WAF Auto-Detection
+			effectiveWAF := wafType
+			if autoWAF && wafType == "" {
+				cookies := []string{}
+				customHeaders := map[string]string{}
+				if auth != nil {
+					cookies = auth.Cookies
+					customHeaders = auth.Headers
+				}
+				wafResult := wafpkg.DetectWAF(u, cookies, customHeaders)
+				if wafResult.Detected {
+					effectiveWAF = wafpkg.GetRecommendedWAF(wafResult.Name)
+					if effectiveWAF != "" {
+						fmt.Printf("  [*] WAF detected: %s\n", wafResult.Name)
+					}
+				}
+			}
+
 			// Dynamic verification
 			if doVerify {
+
 				// Parameter discovery for this URL
 				var urlParams []string
 				if doMine && !doSPA {
@@ -711,9 +752,9 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
 					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
-					results = verifier.VerifyURLWithParams(u, auth, waf, urlParams)
+					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams)
 				} else {
-					results = verifier.VerifyURL(u, auth, waf)
+					results = verifier.VerifyURL(u, auth, effectiveWAF)
 				}
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
@@ -725,7 +766,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, waf string, doVerify, d
 
 			// Stored XSS
 			if doStored {
-				results, _ := verifier.VerifyStoredXSS(u, auth, waf, safetyMode)
+				results, _ := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode)
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {
