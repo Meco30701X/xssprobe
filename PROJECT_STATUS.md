@@ -63,12 +63,17 @@
     - 正则过滤 (replace patterns)
     - 白名单验证 (whitelist, allowlist)
     - CSP 指标 (CSP, nonce, strict-dynamic)
-14. **参数自动发现** (NEW) — `-mine` 自动发现测试参数:
+14. **参数自动发现** — `-mine` 自动发现测试参数:
     - HTML 表单 (input/select/textarea name)
     - URL 参数 (链接中的查询参数)
     - JavaScript (URLSearchParams, getParameter)
     - 100+ 常用参数名 wordlist
     - `-param "id,name"` 手动指定参数
+15. **WAF 自动识别** (NEW) — `-auto-waf` 自动检测 WAF:
+    - 支持 7 种 WAF: Cloudflare, AWS, ModSecurity, Akamai, Imperva, Sucuri, F5
+    - 通过响应头、响应体、状态码指纹识别
+    - 置信度评估 (low/medium/high)
+    - 自动选择对应的绕过 payload
 
 ## 编译状态
 ✅ 编译通过, 无错误
@@ -97,6 +102,11 @@
 ./domxss -u URL -verify                  # 自动发现参数 + 验证
 ./domxss -u URL -verify -param "id,name" # 手动指定参数
 ./domxss -u URL -verify -wordlist        # 加上常用参数 wordlist
+
+# WAF 自动识别 + 绕过
+./domxss -u URL -verify                  # 自动检测 WAF + 选择绕过 payload
+./domxss -u URL -verify -waf cloudflare  # 手动指定 WAF
+./domxss -u URL -verify -auto-waf=false  # 关闭 WAF 自动检测
 
 # 合规扫描
 ./domxss -u URL -scope target.com -rate 2 -audit audit.log
