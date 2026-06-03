@@ -75,7 +75,31 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Stdin pipe support (BETA) - read before checking args
+	var urls []string
 	if *url == "" && *urlList == "" && *file == "" {
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 {
+			// stdin has data (pipe or redirect)
+			fmt.Println("[!] Stdin pipe mode (BETA - experimental feature)")
+			pipeScanner := bufio.NewScanner(os.Stdin)
+			for pipeScanner.Scan() {
+				line := strings.TrimSpace(pipeScanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				if !strings.HasPrefix(line, "http") {
+					line = "https://" + line
+				}
+				urls = append(urls, line)
+			}
+			if len(urls) > 0 {
+				fmt.Printf("[*] Read %d URLs from stdin\n", len(urls))
+			}
+		}
+	}
+
+	if *url == "" && *urlList == "" && *file == "" && len(urls) == 0 {
 		printUsage()
 		os.Exit(1)
 	}
@@ -95,8 +119,7 @@ func main() {
 		fmt.Printf("[*] Auth: %d cookie(s), %d header(s)\n", len(auth.Cookies), len(auth.Headers))
 	}
 
-	// Collect URLs to scan
-	var urls []string
+	// Collect URLs to scan (from -u and -l flags)
 	if *url != "" {
 		u := *url
 		if !strings.HasPrefix(u, "http") {
@@ -237,6 +260,7 @@ func printUsage() {
 	fmt.Println("  domxss -l urls.txt -threads 10                          # Batch scan")
 	fmt.Println("  domxss -u URL -cookie \"session=abc\" -H \"Authorization: Bearer xxx\"")
 	fmt.Println("  domxss -f script.js                                     # Scan local file")
+	fmt.Println("  cat urls.txt | domxss -verify                           # Stdin pipe (BETA)")
 	fmt.Println()
 	fmt.Println("Flags:")
 	fmt.Println("  -u          Target URL")
