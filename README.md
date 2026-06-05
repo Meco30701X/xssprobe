@@ -1,6 +1,6 @@
-# DOMXSS — DOM-based XSS Scanner
+# XSSProbe — XSS Vulnerability Detection Tool
 
-一个用 Go 编写的 DOM XSS 漏洞检测工具，支持静态分析、动态验证、WAF 识别与绕过、SPA 渲染等能力。
+一个用 Go 编写的 XSS 漏洞检测工具，支持静态分析、动态验证、WAF 识别与绕过、SPA 渲染等能力。
 
 > **Disclaimer**: 本工具仅供合法安全测试和授权渗透测试使用。使用者需遵守当地法律法规，未经授权对目标系统进行扫描属于违法行为。
 
@@ -265,7 +265,7 @@ Source: location.hash → var hash → var data → Sink: innerHTML
 ## 项目结构
 
 ```
-domxss/
+xssprobe/
 ├── main.go              # CLI 入口
 ├── scanner/
 │   └── scanner.go       # 静态分析引擎
