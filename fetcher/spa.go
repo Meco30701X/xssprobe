@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/chromedp/cdproto/network"
@@ -88,16 +89,21 @@ func FetchPageSPA(targetURL string, config *SPAConfig) (*SPAResult, error) {
 			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
 		}
 		if len(actions) > 0 {
-			chromedp.Run(taskCtx, actions...)
+			if err := chromedp.Run(taskCtx, actions...); err != nil {
+				return nil, fmt.Errorf("auth setup failed: %w", err)
+			}
 		}
 	}
 
-	// Collect dynamically injected scripts
+	// Collect dynamically injected scripts (mutex-protected for concurrent access)
+	var mu sync.Mutex
 	var dynamicScripts []string
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
 		if e, ok := ev.(*network.EventRequestWillBeSent); ok {
 			if strings.HasSuffix(e.Request.URL, ".js") || strings.Contains(e.Request.URL, ".js?") {
+				mu.Lock()
 				dynamicScripts = append(dynamicScripts, e.Request.URL)
+				mu.Unlock()
 			}
 		}
 	})
@@ -163,9 +169,10 @@ func FetchPageSPA(targetURL string, config *SPAConfig) (*SPAResult, error) {
 			Inline   []string `json:"inline"`
 			External []string `json:"external"`
 		}
-		json.Unmarshal([]byte(scriptJSON), &scripts)
-		result.InlineScripts = scripts.Inline
-		result.ExternalScripts = scripts.External
+		if err := json.Unmarshal([]byte(scriptJSON), &scripts); err == nil {
+			result.InlineScripts = scripts.Inline
+			result.ExternalScripts = scripts.External
+		}
 	}
 
 	// Deduplicate dynamic scripts

@@ -197,7 +197,10 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 		}
 
 		if len(actions) > 0 {
-			chromedp.Run(taskCtx, actions...)
+			if err := chromedp.Run(taskCtx, actions...); err != nil {
+				// Auth setup failed, continue without auth
+				fmt.Printf("  [!] Warning: auth setup failed: %v\n", err)
+			}
 		}
 	}
 
@@ -209,7 +212,9 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 	return taskCtx, combinedCancel
 }
 
+// extractDomain extracts domain from context (unused, cookie domain auto-applies)
 func extractDomain(ctx context.Context) string {
+	// Empty string makes cookie apply to the current page's domain
 	return ""
 }
 

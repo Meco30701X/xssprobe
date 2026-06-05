@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 // SafetyMode controls how stored XSS testing behaves
@@ -28,7 +29,7 @@ const CanaryPrefix = "DOMXSS_TEST"
 
 // GenerateSafeCanary creates a harmless, unique canary string
 func GenerateSafeCanary() string {
-	return fmt.Sprintf("%s_%s", CanaryPrefix, "x7k2m9p4")
+	return fmt.Sprintf("%s_%d", CanaryPrefix, time.Now().UnixNano()%1000000)
 }
 
 // IsSafePayload checks if a payload is safe (no dangerous code)

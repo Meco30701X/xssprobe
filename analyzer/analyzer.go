@@ -37,27 +37,6 @@ func DefaultAnalysisConfig() *AnalysisConfig {
 	}
 }
 
-// AnalyzeURL performs combined static + dynamic analysis
-func AnalyzeURL(targetURL string, auth *verifier.AuthConfig, config *AnalysisConfig) []AnalysisResult {
-	if config == nil {
-		config = DefaultAnalysisConfig()
-	}
-
-	fmt.Printf("\n═══════════════════════════════════════════════════════════════\n")
-	fmt.Printf("🔍 Combined Static + Dynamic Analysis\n")
-	fmt.Printf("═══════════════════════════════════════════════════════════════\n\n")
-
-	// Phase 1: Static Analysis
-	fmt.Printf("[Phase 1] Static Analysis\n")
-	fmt.Printf("───────────────────────────────────────────────────────────────\n")
-
-	// We need to fetch the page and scripts first
-	// For now, we'll work with findings passed in or fetched externally
-	// This will be integrated with the main flow
-
-	return nil
-}
-
 // AnalyzeFindings performs dynamic verification on static findings
 func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifier.AuthConfig, config *AnalysisConfig) []AnalysisResult {
 	if config == nil {

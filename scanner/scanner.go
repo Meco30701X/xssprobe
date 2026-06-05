@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 )
@@ -553,26 +552,4 @@ func detectFilter(line string) FilterInfo {
 	}
 
 	return FilterInfo{false, "", ""}
-}
-
-// isFiltered is a simple check if filtering exists (backward compatible)
-func isFiltered(line string) bool {
-	return detectFilter(line).IsFiltered
-}
-
-// DebugTaint prints the current taint state (for development)
-func DebugTaint(jsContent string) {
-	lines := strings.Split(jsContent, "\n")
-	tracker := NewTaintTracker()
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
-			continue
-		}
-		tracker.TrackLine(trimmed)
-		if len(tracker.GetTaintedVars()) > 0 {
-			fmt.Printf("Line %d: tainted vars = %v\n", i+1, tracker.GetTaintedVars())
-		}
-	}
 }

@@ -226,7 +226,7 @@ func GetDefaultWordlist() []string {
 		// URLs & Callbacks
 		"url", "uri", "link", "href", "callback", "cb", "redirect_uri", "return", "next", "continue", "dest", "destination",
 		// Forms
-		"email", "phone", "address", "message", "comment", "subject", "subject",
+		"email", "phone", "address", "message", "comment", "subject",
 		// API
 		"token", "key", "api_key", "apiKey", "access_token", "code", "state",
 		// Actions

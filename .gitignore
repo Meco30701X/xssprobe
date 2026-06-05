@@ -1,8 +1,10 @@
 # Binary
+xssprobe
+xssprobe.exe
 domxss
+domxss.exe
 
 # Go
-*.exe
 *.exe~
 *.dll
 *.so
@@ -16,3 +18,15 @@ vendor/
 .vscode/
 *.swp
 *.swo
+
+# Claude AI
+.claude/
+
+# Project generated files
+*_audit.jsonl
+*_audit.json
+*.log
+
+# OS
+.DS_Store
+Thumbs.db

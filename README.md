@@ -313,7 +313,9 @@ go test ./waf/...
 
 ## License
 
-本项目仅供合法安全研究和授权测试使用。
+[MIT License](LICENSE)
+
+本项目仅供合法安全研究和授权测试使用。使用者需遵守当地法律法规。
 
 ## Author
 
