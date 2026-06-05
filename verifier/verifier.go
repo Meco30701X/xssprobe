@@ -31,9 +31,43 @@ type AuthConfig struct {
 // Canary is a unique string used to detect if payload reaches the DOM
 const Canary = "xXssCanary42x"
 
+// Custom payload support
+var (
+	customPayloads    []payloads.Payload
+	customPayloadsFirst bool
+	hasCustomPayloads bool
+)
+
+// SetCustomPayloads sets custom payloads for testing
+func SetCustomPayloads(p []payloads.Payload, first bool) {
+	customPayloads = p
+	customPayloadsFirst = first
+	hasCustomPayloads = true
+}
+
+// ClearCustomPayloads clears custom payloads
+func ClearCustomPayloads() {
+	customPayloads = nil
+	hasCustomPayloads = false
+}
+
+// getCustomPayloadValues returns custom payload values
+func getCustomPayloadValues() []string {
+	var values []string
+	for _, p := range customPayloads {
+		values = append(values, p.Value)
+	}
+	return values
+}
+
 // getTestPayloads returns the payload strings to test, optionally filtered by WAF
 func getTestPayloads(waf string) []string {
 	var result []string
+
+	// Add custom payloads first if configured
+	if hasCustomPayloads && customPayloadsFirst {
+		result = append(result, getCustomPayloadValues()...)
+	}
 
 	// Always include canary payloads
 	for _, p := range payloads.GetCanaryPayloads(Canary) {
@@ -56,6 +90,11 @@ func getTestPayloads(waf string) []string {
 		for i := 0; i < limit; i++ {
 			result = append(result, base[i].Value)
 		}
+	}
+
+	// Add custom payloads last if not first
+	if hasCustomPayloads && !customPayloadsFirst {
+		result = append(result, getCustomPayloadValues()...)
 	}
 
 	return result

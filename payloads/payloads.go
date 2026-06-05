@@ -1,9 +1,11 @@
 package payloads
 
 import (
+	"bufio"
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -447,4 +449,63 @@ func GetPayloadsByWAF(waf string) []Payload {
 // Count returns total payload count
 func Count() int {
 	return len(GetAllPayloads())
+}
+
+// LoadPayloadsFromFile loads payloads from a file (one per line)
+func LoadPayloadsFromFile(filename string) ([]Payload, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var payloads []Payload
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Skip empty lines and comments
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		payloads = append(payloads, Payload{
+			Value:   line,
+			Context: ContextHTML, // Default context
+			Tag:     "custom",
+		})
+	}
+	return payloads, scanner.Err()
+}
+
+// LoadPayloadsFromStrings creates payloads from string slice
+func LoadPayloadsFromStrings(values []string) []Payload {
+	var payloads []Payload
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v != "" {
+			payloads = append(payloads, Payload{
+				Value:   v,
+				Context: ContextHTML,
+				Tag:     "custom",
+			})
+		}
+	}
+	return payloads
+}
+
+// MergePayloads merges custom payloads with built-in payloads
+// customFirst: if true, custom payloads are tested first
+func MergePayloads(builtIn, custom []Payload, customFirst bool) []Payload {
+	if customFirst {
+		return append(custom, builtIn...)
+	}
+	return append(builtIn, custom...)
+}
+
+// GetPayloadValues extracts just the payload values
+func GetPayloadValues(payloads []Payload) []string {
+	var values []string
+	for _, p := range payloads {
+		values = append(values, p.Value)
+	}
+	return values
 }
