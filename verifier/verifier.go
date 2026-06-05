@@ -32,6 +32,14 @@ type AuthConfig struct {
 // Canary is a unique string used to detect if payload reaches the DOM
 const Canary = "xXssCanary42x"
 
+// disableCORSFlag controls whether browser same-origin policy is disabled
+var disableCORSFlag bool
+
+// SetDisableCORS sets whether to disable browser same-origin policy
+func SetDisableCORS(disable bool) {
+	disableCORSFlag = disable
+}
+
 // Custom payload support
 var (
 	customPayloads    []payloads.Payload
@@ -152,13 +160,15 @@ func getTestPayloadsByContext(contextType string, waf string) []string {
 }
 
 // newChromeContext creates a chromedp context with optional auth config
-func newChromeContext(ctx context.Context, auth *AuthConfig) (context.Context, context.CancelFunc) {
+func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-web-security", true),
 	)
+	if disableCORS {
+		opts = append(opts, chromedp.Flag("disable-web-security", true))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
@@ -282,7 +292,7 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
 	defer taskCancel()
 
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
@@ -339,7 +349,7 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
 	defer taskCancel()
 
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
@@ -389,7 +399,7 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
 	defer taskCancel()
 
 	// Step 1: Navigate and find input fields
@@ -718,7 +728,7 @@ func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string, limiter *
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
 	defer taskCancel()
 
 	// Inject postMessage listener and trigger

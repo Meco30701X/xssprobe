@@ -12,6 +12,14 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// disableCORSFlag controls whether browser same-origin policy is disabled
+var disableCORSFlag bool
+
+// SetDisableCORS sets whether to disable browser same-origin policy
+func SetDisableCORS(disable bool) {
+	disableCORSFlag = disable
+}
+
 // SPAConfig holds configuration for SPA rendering
 type SPAConfig struct {
 	WaitTime    time.Duration // Time to wait for JS rendering
@@ -50,10 +58,12 @@ func FetchPageSPA(targetURL string, config *SPAConfig) (*SPAResult, error) {
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
 		chromedp.Flag("no-sandbox", true),
-		chromedp.Flag("disable-web-security", true),
 		chromedp.Flag("enable-javascript", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"),
 	)
+	if disableCORSFlag {
+		opts = append(opts, chromedp.Flag("disable-web-security", true))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()

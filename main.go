@@ -72,6 +72,7 @@ func main() {
 	auditLog := flag.String("audit", "", "Audit log file path (JSON lines)")
 	respectRobots := flag.Bool("respect-robots", true, "Respect robots.txt rules")
 	skipLegal := flag.Bool("yes", false, "Skip legal confirmation (for CI/CD automation)")
+	disableCORS := flag.Bool("disable-cors", false, "Disable browser same-origin policy (use with caution)")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
@@ -79,6 +80,13 @@ func main() {
 	// Legal confirmation
 	if !compliance.ConfirmLegalUsage(*skipLegal) {
 		os.Exit(0)
+	}
+
+	// Safety check: -yes requires -scope to prevent blind scanning
+	if *skipLegal && *scope == "" {
+		fmt.Fprintln(os.Stderr, "[!] Error: -yes requires -scope to prevent blind scanning.")
+		fmt.Fprintln(os.Stderr, "    Example: xssprobe -u URL -scope target.com -yes")
+		os.Exit(1)
 	}
 
 	// Stdin pipe support (BETA) - read before checking args
@@ -149,6 +157,12 @@ func main() {
 		urls = append(urls, listURLs...)
 	}
 
+	// Auto-enable audit log for active scanning modes
+	if *auditLog == "" && (*verify || *stored || *crawl) {
+		*auditLog = "xssprobe_audit.jsonl"
+		fmt.Printf("[*] Audit log auto-enabled: %s\n", *auditLog)
+	}
+
 	// Initialize compliance context
 	complianceCfg := compliance.ComplianceConfig{
 		Scope:         *scope,
@@ -162,6 +176,13 @@ func main() {
 		os.Exit(1)
 	}
 	defer complianceCtx.Close()
+
+	// Set browser CORS policy
+	if *disableCORS {
+		fmt.Println("[!] WARNING: Browser same-origin policy disabled. Use with caution.")
+	}
+	verifier.SetDisableCORS(*disableCORS)
+	fetcher.SetDisableCORS(*disableCORS)
 
 	fmt.Printf("[*] Compliance: scope=%s, rate=%d/s, robots=%v\n",
 		*scope, *rateLimit, *respectRobots)
@@ -242,6 +263,8 @@ func main() {
 	if *customPayload != "" {
 		customPayloads = payloads.LoadPayloadsFromStrings([]string{*customPayload})
 		fmt.Printf("[*] Loaded 1 custom payload from command line\n")
+		fmt.Println("[!] WARNING: Custom payloads are NOT reviewed for safety.")
+		fmt.Println("    You are fully responsible for their impact on the target system.")
 	}
 	if *payloadFile != "" {
 		filePayloads, err := payloads.LoadPayloadsFromFile(*payloadFile)
@@ -251,6 +274,8 @@ func main() {
 		}
 		customPayloads = append(customPayloads, filePayloads...)
 		fmt.Printf("[*] Loaded %d custom payloads from %s\n", len(filePayloads), *payloadFile)
+		fmt.Println("[!] WARNING: Custom payloads are NOT reviewed for safety.")
+		fmt.Println("    You are fully responsible for their impact on the target system.")
 	}
 	if len(customPayloads) > 0 && *payloadMerge {
 		fmt.Printf("[*] Custom payloads will be %s built-in payloads\n",
@@ -316,6 +341,9 @@ func printUsage() {
 	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (default for -stored)")
 	fmt.Println("  -safe       Use only harmless canary payloads")
 	fmt.Println("  -confirm    Ask for confirmation before each submission")
+	fmt.Println()
+	fmt.Println("Browser Flags:")
+	fmt.Println("  -disable-cors  Disable browser same-origin policy (default: false)")
 	fmt.Println()
 	fmt.Println("Custom Payload Flags:")
 	fmt.Println("  -payload        Custom payload string to test")
