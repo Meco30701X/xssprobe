@@ -146,9 +146,20 @@ echo https://target.com | domxss         # 单个 URL
 ./domxss -u URL -o result.json           # JSON 导出
 ```
 
+## 测试覆盖
+- **compliance**: 9 tests — Scope、RateLimiter、Robots、Audit
+- **miner**: 9 tests — 参数发现、合并、wordlist
+- **payloads**: 9 tests — 加载、过滤、合并、canary
+- **scanner**: 7 tests — Source/Sink 检测、过滤识别、污点追踪
+- **waf**: 4 tests — WAF 指纹识别
+- **Total**: 38 tests, 全部通过
+
+```bash
+go test ./...  # 运行所有测试
+```
+
 ## 下一步建议
 - HTML 报告输出
 - README 文档 (GitHub 展示)
-- 单元测试
 - Docker 镜像
 - CI/CD 集成示例
