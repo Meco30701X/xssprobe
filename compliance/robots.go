@@ -104,8 +104,8 @@ func fetchRobotsFile(baseURL string) (*RobotsRules, error) {
 
 		switch directive {
 		case "user-agent":
-			// Match * (all agents) or xssprobe
-			inUserAgent = value == "*" || strings.Contains(strings.ToLower(value), "xssprobe")
+			// Match * (all agents) or domxss
+			inUserAgent = value == "*" || strings.Contains(strings.ToLower(value), "domxss")
 		case "disallow":
 			if inUserAgent && value != "" {
 				rules.Disallows = append(rules.Disallows, value)
