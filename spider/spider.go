@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Meco30701X/domxss/compliance"
+	"github.com/Meco30701X/xssprobe/compliance"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )

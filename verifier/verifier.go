@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Meco30701X/domxss/payloads"
-	"github.com/Meco30701X/domxss/safety"
+	"github.com/Meco30701X/xssprobe/payloads"
+	"github.com/Meco30701X/xssprobe/safety"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"

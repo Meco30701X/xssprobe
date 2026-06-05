@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Meco30701X/domxss/scanner"
-	"github.com/Meco30701X/domxss/verifier"
+	"github.com/Meco30701X/xssprobe/scanner"
+	"github.com/Meco30701X/xssprobe/verifier"
 )
 
 // PrintFindings prints findings to stdout in a readable format

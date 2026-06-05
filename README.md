@@ -44,8 +44,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/Meco30701X/domxss.git
-cd domxss
+git clone https://github.com/Meco30701X/xssprobe.git
+cd xssprobe
 
 # 编译
 export PATH=/usr/local/go/bin:$PATH
@@ -66,111 +66,111 @@ go run main.go -u https://target.com
 
 ```bash
 # 静态分析（最快，仅模式匹配）
-./domxss -u https://target.com
+./xssprobe -u https://target.com
 
 # 反射型动态验证（推荐）
-./domxss -u https://target.com -verify
+./xssprobe -u https://target.com -verify
 
 # 存储型 XSS 检测
-./domxss -u https://target.com -stored -dry-run
+./xssprobe -u https://target.com -stored -dry-run
 
 # SPA 渲染模式
-./domxss -u https://target.com -spa
+./xssprobe -u https://target.com -spa
 
 # 自动爬虫扫描
-./domxss -u https://target.com -crawl -max-pages 100
+./xssprobe -u https://target.com -crawl -max-pages 100
 ```
 
 ### 结合分析模式（推荐，低误报）
 
 ```bash
 # 静态 + 动态结合分析
-./domxss -u https://target.com -analyze
+./xssprobe -u https://target.com -analyze
 
 # 限制动态验证数量
-./domxss -u https://target.com -analyze -max-verify 5
+./xssprobe -u https://target.com -analyze -max-verify 5
 
 # 跳过已过滤的发现
-./domxss -u https://target.com -analyze -skip-filtered
+./xssprobe -u https://target.com -analyze -skip-filtered
 ```
 
 ### 参数发现
 
 ```bash
 # 自动发现参数（默认开启）
-./domxss -u https://target.com -verify
+./xssprobe -u https://target.com -verify
 
 # 手动指定参数
-./domxss -u https://target.com -verify -param "id,name,email"
+./xssprobe -u https://target.com -verify -param "id,name,email"
 
 # 加上常用参数 wordlist
-./domxss -u https://target.com -verify -wordlist
+./xssprobe -u https://target.com -verify -wordlist
 ```
 
 ### WAF 识别与绕过
 
 ```bash
 # 自动检测 WAF（默认开启）
-./domxss -u https://target.com -verify
+./xssprobe -u https://target.com -verify
 
 # 手动指定 WAF
-./domxss -u https://target.com -verify -waf cloudflare
+./xssprobe -u https://target.com -verify -waf cloudflare
 
 # 关闭 WAF 自动检测
-./domxss -u https://target.com -verify -auto-waf=false
+./xssprobe -u https://target.com -verify -auto-waf=false
 ```
 
 ### 自定义 Payload
 
 ```bash
 # 单个 payload
-./domxss -u https://target.com -verify -payload "<script>alert(1)</script>"
+./xssprobe -u https://target.com -verify -payload "<script>alert(1)</script>"
 
 # 从文件加载 payload（每行一个）
-./domxss -u https://target.com -verify -payloads custom_payloads.txt
+./xssprobe -u https://target.com -verify -payloads custom_payloads.txt
 
 # 合并自定义 + 内置 payload
-./domxss -u https://target.com -verify -payloads custom.txt -payload-merge
+./xssprobe -u https://target.com -verify -payloads custom.txt -payload-merge
 
 # 优先测试自定义 payload
-./domxss -u https://target.com -verify -payloads custom.txt -payload-first
+./xssprobe -u https://target.com -verify -payloads custom.txt -payload-first
 ```
 
 ### 合规扫描
 
 ```bash
 # 限定域名 + 限速 + 审计日志
-./domxss -u https://target.com -scope target.com -rate 2 -audit audit.log
+./xssprobe -u https://target.com -scope target.com -rate 2 -audit audit.log
 
 # CI/CD 自动化（跳过法律确认）
-./domxss -u https://target.com -scope target.com -yes
+./xssprobe -u https://target.com -scope target.com -yes
 ```
 
 ### 批量扫描
 
 ```bash
 # 从文件读取 URL
-./domxss -l urls.txt -threads 10
+./xssprobe -l urls.txt -threads 10
 
 # Stdin 管道（BETA）
-cat urls.txt | ./domxss -verify
+cat urls.txt | ./xssprobe -verify
 ```
 
 ### 带认证扫描
 
 ```bash
 # Cookie
-./domxss -u https://target.com -cookie "session=abc; token=xyz"
+./xssprobe -u https://target.com -cookie "session=abc; token=xyz"
 
 # 自定义 Header
-./domxss -u https://target.com -H "Authorization: Bearer xxx"
+./xssprobe -u https://target.com -H "Authorization: Bearer xxx"
 ```
 
 ### 输出
 
 ```bash
 # JSON 导出
-./domxss -u https://target.com -o result.json
+./xssprobe -u https://target.com -o result.json
 ```
 
 ## CLI 参数一览

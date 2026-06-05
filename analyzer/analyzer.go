@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Meco30701X/domxss/scanner"
-	"github.com/Meco30701X/domxss/verifier"
+	"github.com/Meco30701X/xssprobe/scanner"
+	"github.com/Meco30701X/xssprobe/verifier"
 )
 
 // AnalysisResult represents the combined analysis result

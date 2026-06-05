@@ -1,4 +1,4 @@
-module github.com/Meco30701X/domxss
+module github.com/Meco30701X/xssprobe
 
 go 1.26
 

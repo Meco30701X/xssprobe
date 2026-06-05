@@ -1,7 +1,7 @@
 # DOMXSS 项目状态总结
 
 ## 基本信息
-- **仓库**: https://github.com/Meco30701X/domxss (私有)
+- **仓库**: https://github.com/Meco30701X/xssprobe (私有)
 - **语言**: Go (go 1.26, 需要 `/usr/local/go/bin/go`)
 - **目录**: `/home/domxss/`
 - **依赖**: chromedp (headless Chrome)
@@ -75,7 +75,7 @@
     - 置信度评估 (low/medium/high)
     - 自动选择对应的绕过 payload
 16. **Stdin 管道支持** (BETA) — 从 stdin 读取 URL:
-    - `cat urls.txt | domxss -verify`
+    - `cat urls.txt | xssprobe -verify`
     - 支持工具链集成
     - 实验性功能，显示 BETA 提示
 17. **上下文感知 Payload** — 根据注入点上下文选择 payload:
@@ -105,45 +105,45 @@
 ## 功能用法速查
 ```bash
 # 基础扫描
-./domxss -u URL                          # 静态分析
-./domxss -u URL -verify                  # 反射型验证
-./domxss -u URL -stored -dry-run         # 存储型 (最安全)
-./domxss -u URL -spa                     # SPA 渲染模式
-./domxss -u URL -crawl -max-pages 100    # 自动爬虫扫描
+./xssprobe -u URL                          # 静态分析
+./xssprobe -u URL -verify                  # 反射型验证
+./xssprobe -u URL -stored -dry-run         # 存储型 (最安全)
+./xssprobe -u URL -spa                     # SPA 渲染模式
+./xssprobe -u URL -crawl -max-pages 100    # 自动爬虫扫描
 
 # 结合分析 (推荐, 降低误报)
-./domxss -u URL -analyze                 # 静态+动态结合分析
-./domxss -u URL -analyze -max-verify 5   # 限制动态验证数量
-./domxss -u URL -analyze -skip-filtered  # 跳过已过滤的发现
+./xssprobe -u URL -analyze                 # 静态+动态结合分析
+./xssprobe -u URL -analyze -max-verify 5   # 限制动态验证数量
+./xssprobe -u URL -analyze -skip-filtered  # 跳过已过滤的发现
 
 # 参数发现 + 验证
-./domxss -u URL -verify                  # 自动发现参数 + 验证
-./domxss -u URL -verify -param "id,name" # 手动指定参数
-./domxss -u URL -verify -wordlist        # 加上常用参数 wordlist
+./xssprobe -u URL -verify                  # 自动发现参数 + 验证
+./xssprobe -u URL -verify -param "id,name" # 手动指定参数
+./xssprobe -u URL -verify -wordlist        # 加上常用参数 wordlist
 
 # WAF 自动识别 + 绕过
-./domxss -u URL -verify                  # 自动检测 WAF + 选择绕过 payload
-./domxss -u URL -verify -waf cloudflare  # 手动指定 WAF
-./domxss -u URL -verify -auto-waf=false  # 关闭 WAF 自动检测
+./xssprobe -u URL -verify                  # 自动检测 WAF + 选择绕过 payload
+./xssprobe -u URL -verify -waf cloudflare  # 手动指定 WAF
+./xssprobe -u URL -verify -auto-waf=false  # 关闭 WAF 自动检测
 
 # Stdin 管道 (BETA)
-cat urls.txt | domxss -verify            # 从 stdin 读取 URL
+cat urls.txt | xssprobe -verify            # 从 stdin 读取 URL
 echo https://target.com | domxss         # 单个 URL
 
 # 自定义 Payload
-./domxss -u URL -verify -payload "<script>alert(1)</script>"
-./domxss -u URL -verify -payloads custom_payloads.txt
-./domxss -u URL -verify -payloads payloads.txt -payload-first=false
+./xssprobe -u URL -verify -payload "<script>alert(1)</script>"
+./xssprobe -u URL -verify -payloads custom_payloads.txt
+./xssprobe -u URL -verify -payloads payloads.txt -payload-first=false
 
 # 合规扫描
-./domxss -u URL -scope target.com -rate 2 -audit audit.log
-./domxss -u URL -scope target.com -respect-robots -yes  # CI/CD
+./xssprobe -u URL -scope target.com -rate 2 -audit audit.log
+./xssprobe -u URL -scope target.com -respect-robots -yes  # CI/CD
 
 # 高级用法
-./domxss -u URL -verify -waf cloudflare  # WAF 绕过
-./domxss -l urls.txt -threads 10         # 批量扫描
-./domxss -u URL -cookie "k=v" -H "K: V" # 带认证
-./domxss -u URL -o result.json           # JSON 导出
+./xssprobe -u URL -verify -waf cloudflare  # WAF 绕过
+./xssprobe -l urls.txt -threads 10         # 批量扫描
+./xssprobe -u URL -cookie "k=v" -H "K: V" # 带认证
+./xssprobe -u URL -o result.json           # JSON 导出
 ```
 
 ## 测试覆盖
