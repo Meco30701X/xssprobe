@@ -38,7 +38,7 @@
 ```
 
 ## 已完成功能 (已推送到 GitHub main 分支)
-1. **静态分析** — Source/Sink 模式匹配 (9种Source + 10种Sink)
+1. **静态分析** — Source/Sink 模式匹配 (40+种Source + 50+种Sink)
 2. **跨行污点追踪** — 变量赋值链追踪 (source → var1 → var2 → sink)
 3. **反射型动态验证** — chromedp 注入 payload 确认 (hash/query)
 4. **存储型 XSS 检测** — 自动填表提交 + 刷新检查持久化
@@ -78,11 +78,15 @@
     - `cat urls.txt | domxss -verify`
     - 支持工具链集成
     - 实验性功能，显示 BETA 提示
-17. **上下文感知 Payload** (NEW) — 根据注入点上下文选择 payload:
+17. **上下文感知 Payload** — 根据注入点上下文选择 payload:
     - 检测 8 种注入上下文: HTML/属性/JS字符串/JS代码/URL/CSS/注释/无
     - 发送 canary 探测反射位置
     - 根据上下文选择最匹配的 payload
     - 减少请求数，提高命中率
+18. **扩展 Source/Sink 模式** (NEW) — 40+ Source + 50+ Sink:
+    - Source: location.*, document.*, window.*, DOM元素, 存储API, jQuery, React/Vue/Angular
+    - Sink: eval, innerHTML, document.write, setAttribute, window.open, jQuery.*, 框架特定
+    - 覆盖 DOM Clobbering 和 Prototype Pollution 向量
 
 ## 编译状态
 ✅ 编译通过, 无错误
