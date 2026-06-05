@@ -78,6 +78,11 @@
     - `cat urls.txt | domxss -verify`
     - 支持工具链集成
     - 实验性功能，显示 BETA 提示
+17. **上下文感知 Payload** (NEW) — 根据注入点上下文选择 payload:
+    - 检测 8 种注入上下文: HTML/属性/JS字符串/JS代码/URL/CSS/注释/无
+    - 发送 canary 探测反射位置
+    - 根据上下文选择最匹配的 payload
+    - 减少请求数，提高命中率
 
 ## 编译状态
 ✅ 编译通过, 无错误
