@@ -25,7 +25,7 @@ func DefaultSafety() *SafetyMode {
 }
 
 // CanaryPrefix is the prefix for safe test payloads
-const CanaryPrefix = "DOMXSS_TEST"
+const CanaryPrefix = "XSSPROBE_TEST"
 
 // GenerateSafeCanary creates a harmless, unique canary string
 func GenerateSafeCanary() string {
@@ -62,16 +62,16 @@ func GetSafePayloads() []string {
 		// Plain text canary - no HTML, no JS
 		GenerateSafeCanary(),
 		// Simple text with angle brackets (tests HTML encoding)
-		"<DOMXSS_TEST>",
+		"<XSSPROBE_TEST>",
 		// Text with quotes (tests attribute escaping)
-		`"DOMXSS_TEST"`,
-		`'DOMXSS_TEST'`,
+		`"XSSPROBE_TEST"`,
+		`'XSSPROBE_TEST'`,
 		// Text with special chars (tests various filters)
-		`DOMXSS<TEST>"'&`,
+		`XSSPROBE<TEST>"'&`,
 		// Unicode test
-		`DOMXSS_T€ST`,
+		`XSSPROBE_T€ST`,
 		// Null byte test
-		"DOMXSS\x00TEST",
+		"XSSPROBE\x00TEST",
 	}
 }
 
