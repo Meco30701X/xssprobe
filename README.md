@@ -40,25 +40,44 @@
 
 ## 安装
 
+### 下载预编译二进制（推荐）
+
+从 [Releases](https://github.com/Meco30701X/xssprobe/releases) 页面下载对应平台的二进制文件：
+
+| 平台 | 文件 |
+|------|------|
+| Windows x64 | `xssprobe-windows-amd64.exe` |
+| Linux x64 | `xssprobe-linux-amd64` |
+| Linux ARM64 | `xssprobe-linux-arm64` |
+| macOS Intel | `xssprobe-darwin-amd64` |
+| macOS Apple Silicon | `xssprobe-darwin-arm64` |
+
+```bash
+# Linux/macOS
+chmod +x xssprobe-linux-amd64
+./xssprobe-linux-amd64 -u https://target.com
+
+# Windows
+.\xssprobe-windows-amd64.exe -u https://target.com
+```
+
+> 不需要安装 Go，下载即用。动态验证功能需要系统已安装 Chrome/Chromium。
+
 ### 从源码编译
 
 ```bash
-# 克隆仓库
 git clone https://github.com/Meco30701X/xssprobe.git
 cd xssprobe
-
-# 编译
-export PATH=/usr/local/go/bin:$PATH
-go build -o domxss .
-
-# 或直接运行
-go run main.go -u https://target.com
+go build -o xssprobe .
+./xssprobe -u https://target.com
 ```
 
 ### 环境要求
 
-- Go 1.21+
-- Chrome/Chromium（SPA 渲染和动态验证需要）
+- **Chrome/Chromium**（`-verify`、`-stored`、`-spa`、`-crawl` 功能需要）
+  - Linux: `apt install chromium-browser`
+  - Windows/macOS: 通常已安装 Chrome
+- 纯静态分析（`-u` 不加验证标志）不需要 Chrome
 
 ## 使用方法
 
