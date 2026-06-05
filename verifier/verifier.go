@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Meco30701X/xssprobe/compliance"
 	"github.com/Meco30701X/xssprobe/payloads"
 	"github.com/Meco30701X/xssprobe/safety"
 	"github.com/chromedp/cdproto/network"
@@ -203,14 +204,14 @@ func extractDomain(ctx context.Context) string {
 }
 
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig, waf string) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter) []VerifyResult {
 	// Default parameters for backward compatibility
 	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
-	return VerifyURLWithParams(targetURL, auth, waf, defaultParams)
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter)
 }
 
 // VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
-func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string) []VerifyResult {
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter) []VerifyResult {
 	var results []VerifyResult
 	testPayloads := getTestPayloads(waf)
 
@@ -220,12 +221,12 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 
 	for _, payload := range testPayloads {
 		// Test hash fragment
-		r := testHash(targetURL, payload, auth)
+		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
 
 		// Test each parameter
 		for _, param := range params {
-			r = testSearchParam(targetURL, param, payload, auth)
+			r = testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
 		}
 	}
@@ -234,13 +235,13 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 }
 
 // VerifyURLWithContext tests a URL with context-aware payload selection
-func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string) []VerifyResult {
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter) []VerifyResult {
 	var results []VerifyResult
 
 	// Test hash fragment with default payloads
 	testPayloads := getTestPayloads(waf)
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
-		r := testHash(targetURL, payload, auth)
+		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
 	}
 
@@ -255,7 +256,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		fmt.Printf("    Testing '%s' (context: %s) with %d payloads\n", param, ctxType, len(contextPayloads))
 
 		for _, payload := range contextPayloads {
-			r := testSearchParam(targetURL, param, payload, auth)
+			r := testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
 		}
 	}
@@ -270,9 +271,13 @@ func min(a, b int) int {
 	return b
 }
 
-func testHash(baseURL, payload string, auth *AuthConfig) VerifyResult {
+func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.RateLimiter) VerifyResult {
 	result := VerifyResult{Payload: payload, Source: "hash"}
 	testURL := baseURL + "#" + url.QueryEscape(payload)
+
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -313,7 +318,7 @@ func testHash(baseURL, payload string, auth *AuthConfig) VerifyResult {
 	return result
 }
 
-func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyResult {
+func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *compliance.RateLimiter) VerifyResult {
 	result := VerifyResult{Payload: payload, Source: "search:" + param}
 
 	parsedURL, err := url.Parse(baseURL)
@@ -326,6 +331,10 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyRes
 	q.Set(param, payload)
 	parsedURL.RawQuery = q.Encode()
 	testURL := parsedURL.String()
+
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -367,11 +376,15 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig) VerifyRes
 }
 
 // VerifyStoredXSS tests for stored DOM XSS with safety controls
-func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode *safety.SafetyMode) ([]VerifyResult, bool) {
+func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode *safety.SafetyMode, limiter *compliance.RateLimiter) ([]VerifyResult, bool) {
 	var results []VerifyResult
 
 	// Safety: print configuration
 	safety.PrintSafetyInfo(safetyMode)
+
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -497,6 +510,10 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode 
 
 	// Step 3: Reload and check persistence (only if we submitted something)
 	if submitted {
+		if limiter != nil {
+			limiter.Wait()
+		}
+
 		var afterHTML string
 		var jsTriggered bool
 
@@ -667,7 +684,7 @@ func TestHashOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
 
 	// Use first canary payload
 	payload := payloads[0]
-	return testHash(targetURL, payload, auth)
+	return testHash(targetURL, payload, auth, nil)
 }
 
 // TestSearchOnly tests only search parameter XSS (for analyzer)
@@ -681,7 +698,7 @@ func TestSearchOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult
 	params := []string{"q", "search", "id", "page", "input", "name", "s"}
 
 	for _, param := range params {
-		r := testSearchParam(targetURL, param, payload, auth)
+		r := testSearchParam(targetURL, param, payload, auth, nil)
 		if r.Triggered {
 			return r
 		}
@@ -691,8 +708,12 @@ func TestSearchOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult
 }
 
 // VerifyPostMessage tests postMessage-based XSS
-func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string) VerifyResult {
+func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter) VerifyResult {
 	result := VerifyResult{Source: "postMessage", Payload: Canary}
+
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

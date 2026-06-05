@@ -217,11 +217,13 @@ func main() {
 		Confirm: *confirm,
 	}
 
-	// If stored mode without any safety flag, default to safe+confirm
+	// If stored mode without any safety flag, default to dry-run (safest)
 	if *stored && !*dryRun && !*safePayloads && !*confirm {
+		safetyMode.DryRun = true
 		safetyMode.Safe = true
 		safetyMode.Confirm = true
-		fmt.Println("[*] Stored XSS: using safe payloads with confirmation (use -dry-run for safest mode)")
+		fmt.Println("[*] Stored XSS: dry-run mode enabled (no data will be submitted)")
+		fmt.Println("[*] To actually submit test data, use -stored -dry-run=false -safe -confirm")
 	}
 
 	// Parse manual parameters
@@ -281,9 +283,8 @@ func printUsage() {
 	fmt.Println("  domxss -u https://example.com                          # Static analysis")
 	fmt.Println("  domxss -u URL -analyze                                  # Combined analysis (recommended)")
 	fmt.Println("  domxss -u URL -verify                                   # Reflected DOM XSS")
-	fmt.Println("  domxss -u URL -stored -dry-run                          # Stored XSS (safe, no submit)")
-	fmt.Println("  domxss -u URL -stored -safe -confirm                    # Stored XSS (safe payloads)")
-	fmt.Println("  domxss -u URL -stored                                   # Stored XSS (full test)")
+	fmt.Println("  domxss -u URL -stored                                   # Stored XSS (dry-run, no submit)")
+	fmt.Println("  domxss -u URL -stored -dry-run=false -safe -confirm     # Stored XSS (submit safe payloads)")
 	fmt.Println("  domxss -u URL -spa                                      # SPA rendering mode")
 	fmt.Println("  domxss -u URL -crawl                                    # Auto-crawl and scan all pages")
 	fmt.Println("  domxss -u URL -crawl -max-pages 100 -max-depth 5       # Deep crawl")
@@ -312,7 +313,7 @@ func printUsage() {
 	fmt.Println("  -H          Custom header (repeatable)")
 	fmt.Println()
 	fmt.Println("Safety Flags (for stored XSS):")
-	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (safest)")
+	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (default for -stored)")
 	fmt.Println("  -safe       Use only harmless canary payloads")
 	fmt.Println("  -confirm    Ask for confirmation before each submission")
 	fmt.Println()
@@ -578,18 +579,18 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 
 			if len(paramContexts) > 0 {
 				fmt.Printf("\n[*] Testing %d reflected parameters with context-aware payloads...\n", len(paramContexts))
-				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts)
+				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			} else {
 				fmt.Println("[*] No parameters reflected - testing with default payloads")
-				results := verifier.VerifyURL(targetURL, auth, effectiveWAF)
+				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 		} else {
 			// Fallback to default params
-			results := verifier.VerifyURL(targetURL, auth, effectiveWAF)
+			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		}
@@ -601,7 +602,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	// Stored DOM XSS
 	if doStored {
 		fmt.Println("\n[*] Stored DOM XSS detection...")
-		results, _ := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode)
+		results, _ := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode, cc.Limiter)
 		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
 	}
@@ -855,9 +856,9 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
 					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
-					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams)
+					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter)
 				} else {
-					results = verifier.VerifyURL(u, auth, effectiveWAF)
+					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter)
 				}
 
 				// Clear custom payloads after verification
@@ -872,7 +873,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 
 			// Stored XSS
 			if doStored {
-				results, _ := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode)
+				results, _ := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode, cc.Limiter)
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {

@@ -168,7 +168,7 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 	// For postMessage sources
 	if strings.Contains(source, "message") || strings.Contains(source, "postmessage") {
 		// postMessage requires special handling
-		return verifier.VerifyPostMessage(targetURL, auth, waf)
+		return verifier.VerifyPostMessage(targetURL, auth, waf, nil)
 	}
 
 	// Default: test both hash and search params
