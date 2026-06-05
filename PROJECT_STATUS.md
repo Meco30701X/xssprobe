@@ -83,10 +83,15 @@
     - 发送 canary 探测反射位置
     - 根据上下文选择最匹配的 payload
     - 减少请求数，提高命中率
-18. **扩展 Source/Sink 模式** (NEW) — 40+ Source + 50+ Sink:
+18. **扩展 Source/Sink 模式** — 40+ Source + 50+ Sink:
     - Source: location.*, document.*, window.*, DOM元素, 存储API, jQuery, React/Vue/Angular
     - Sink: eval, innerHTML, document.write, setAttribute, window.open, jQuery.*, 框架特定
     - 覆盖 DOM Clobbering 和 Prototype Pollution 向量
+19. **自定义 Payload** (NEW) — 支持用户自定义 payload:
+    - `-payload "string"` 单个自定义 payload
+    - `-payloads file.txt` 从文件加载 (每行一个)
+    - `-payload-merge` 合并自定义 + 内置 payload
+    - `-payload-first` 优先测试自定义 payload
 
 ## 编译状态
 ✅ 编译通过, 无错误
@@ -124,6 +129,11 @@
 # Stdin 管道 (BETA)
 cat urls.txt | domxss -verify            # 从 stdin 读取 URL
 echo https://target.com | domxss         # 单个 URL
+
+# 自定义 Payload
+./domxss -u URL -verify -payload "<script>alert(1)</script>"
+./domxss -u URL -verify -payloads custom_payloads.txt
+./domxss -u URL -verify -payloads payloads.txt -payload-first=false
 
 # 合规扫描
 ./domxss -u URL -scope target.com -rate 2 -audit audit.log
