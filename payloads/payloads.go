@@ -416,6 +416,23 @@ func GetPayloadsByContext(ctx Context) []Payload {
 	return filtered
 }
 
+// GetPayloadsByContexts returns payloads filtered by multiple contexts
+func GetPayloadsByContexts(contexts []Context) []Payload {
+	var filtered []Payload
+	seen := make(map[string]bool)
+
+	for _, p := range GetAllPayloads() {
+		for _, ctx := range contexts {
+			if p.Context == ctx && !seen[p.Value] {
+				seen[p.Value] = true
+				filtered = append(filtered, p)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
 // GetPayloadsByWAF returns payloads filtered by target WAF
 func GetPayloadsByWAF(waf string) []Payload {
 	var filtered []Payload

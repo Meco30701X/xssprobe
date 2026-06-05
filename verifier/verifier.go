@@ -61,6 +61,56 @@ func getTestPayloads(waf string) []string {
 	return result
 }
 
+// getTestPayloadsByContext returns payloads selected by injection context and WAF
+func getTestPayloadsByContext(contextType string, waf string) []string {
+	var result []string
+
+	// Always include canary payloads
+	for _, p := range payloads.GetCanaryPayloads(Canary) {
+		result = append(result, p.Value)
+	}
+
+	// Map context to payload contexts
+	var targetContexts []payloads.Context
+	switch contextType {
+	case "html", "comment":
+		targetContexts = []payloads.Context{payloads.ContextHTML}
+	case "attribute":
+		targetContexts = []payloads.Context{payloads.ContextAttr, payloads.ContextHTML}
+	case "js-string":
+		targetContexts = []payloads.Context{payloads.ContextJS, payloads.ContextJSVar}
+	case "js-code":
+		targetContexts = []payloads.Context{payloads.ContextHTML, payloads.ContextJS}
+	case "url":
+		targetContexts = []payloads.Context{payloads.ContextURL, payloads.ContextHTML}
+	case "css":
+		targetContexts = []payloads.Context{payloads.ContextCSS, payloads.ContextHTML}
+	default:
+		targetContexts = []payloads.Context{payloads.ContextHTML, payloads.ContextAttr, payloads.ContextJS}
+	}
+
+	// Get context-specific payloads
+	if waf != "" {
+		// Get WAF payloads
+		wafPayloads := payloads.GetPayloadsByWAF(waf)
+		for _, p := range wafPayloads {
+			result = append(result, p.Value)
+		}
+	}
+
+	// Add context-specific payloads
+	contextPayloads := payloads.GetPayloadsByContexts(targetContexts)
+	limit := 15
+	if len(contextPayloads) < limit {
+		limit = len(contextPayloads)
+	}
+	for i := 0; i < limit; i++ {
+		result = append(result, contextPayloads[i].Value)
+	}
+
+	return result
+}
+
 // newChromeContext creates a chromedp context with optional auth config
 func newChromeContext(ctx context.Context, auth *AuthConfig) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -142,6 +192,43 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 	}
 
 	return results
+}
+
+// VerifyURLWithContext tests a URL with context-aware payload selection
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string) []VerifyResult {
+	var results []VerifyResult
+
+	// Test hash fragment with default payloads
+	testPayloads := getTestPayloads(waf)
+	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
+		r := testHash(targetURL, payload, auth)
+		results = append(results, r)
+	}
+
+	// Test each parameter with context-aware payloads
+	for param, ctxType := range paramContexts {
+		// Get context-specific payloads
+		contextPayloads := getTestPayloadsByContext(ctxType, waf)
+		if len(contextPayloads) == 0 {
+			contextPayloads = testPayloads[:min(10, len(testPayloads))]
+		}
+
+		fmt.Printf("    Testing '%s' (context: %s) with %d payloads\n", param, ctxType, len(contextPayloads))
+
+		for _, payload := range contextPayloads {
+			r := testSearchParam(targetURL, param, payload, auth)
+			results = append(results, r)
+		}
+	}
+
+	return results
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func testHash(baseURL, payload string, auth *AuthConfig) VerifyResult {

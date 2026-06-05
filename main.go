@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Meco30701X/domxss/analyzer"
+	ctxpkg "github.com/Meco30701X/domxss/context"
 	"github.com/Meco30701X/domxss/compliance"
 	"github.com/Meco30701X/domxss/fetcher"
 	"github.com/Meco30701X/domxss/miner"
@@ -510,11 +511,37 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	if doVerify {
 		fmt.Println("\n[*] Reflected DOM XSS verification...")
 		paramNames := miner.ParamNames(discoveredParams)
+
 		if len(paramNames) > 0 {
-			fmt.Printf("[*] Testing %d parameters...\n", len(paramNames))
-			results := verifier.VerifyURLWithParams(targetURL, auth, wafType, paramNames)
-			allVerifyResults = append(allVerifyResults, results...)
-			verifier.PrintResults(results)
+			// Context detection for each parameter
+			fmt.Println("[*] Detecting injection contexts...")
+			cookies := []string{}
+			customHeaders := map[string]string{}
+			if auth != nil {
+				cookies = auth.Cookies
+				customHeaders = auth.Headers
+			}
+
+			paramContexts := make(map[string]string)
+			for _, param := range paramNames {
+				ctxResult := ctxpkg.DetectContext(targetURL, param, cookies, customHeaders)
+				ctxpkg.PrintContextResult(ctxResult, param)
+				if ctxResult.Reflected {
+					paramContexts[param] = string(ctxResult.Context)
+				}
+			}
+
+			if len(paramContexts) > 0 {
+				fmt.Printf("\n[*] Testing %d reflected parameters with context-aware payloads...\n", len(paramContexts))
+				results := verifier.VerifyURLWithContext(targetURL, auth, wafType, paramContexts)
+				allVerifyResults = append(allVerifyResults, results...)
+				verifier.PrintResults(results)
+			} else {
+				fmt.Println("[*] No parameters reflected - testing with default payloads")
+				results := verifier.VerifyURL(targetURL, auth, wafType)
+				allVerifyResults = append(allVerifyResults, results...)
+				verifier.PrintResults(results)
+			}
 		} else {
 			// Fallback to default params
 			results := verifier.VerifyURL(targetURL, auth, wafType)
