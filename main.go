@@ -86,6 +86,7 @@ func main() {
 	urlList := flag.String("l", "", "File containing URLs to scan (one per line)")
 	file := flag.String("f", "", "Local JS file to scan")
 	output := flag.String("o", "", "Output results to JSON file")
+	htmlOutput := flag.String("html", "", "HTML report output path")
 	verify := &verifyMode{}
 	flag.Var(verify, "verify", "Dynamic verification: -verify (high-rate), -verify all (all payloads), -verify N (stop after N)")
 	stored := flag.Bool("stored", false, "Test for stored DOM XSS")
@@ -363,11 +364,11 @@ func main() {
 		if *analyze {
 			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
 		} else {
-			scanURL(urls[0], auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx,
+			scanURL(urls[0], auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, safetyMode, complianceCtx,
 				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
 		}
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx,
+		scanBatch(urls, auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, *threads, safetyMode, complianceCtx,
 			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
 	}
 }
@@ -505,7 +506,7 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
 	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
@@ -752,6 +753,15 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 		}
 		fmt.Printf("\n[*] Results saved to %s\n", output)
 	}
+
+	// Generate HTML report
+	if htmlOutput != "" {
+		if err := report.OutputHTML(allFindings, allVerifyResults, targetURL, htmlOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "[!] HTML report error: %v\n", err)
+		} else {
+			fmt.Printf("[*] HTML report saved to %s\n", htmlOutput)
+		}
+	}
 }
 
 func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, maxVerify int, skipFiltered bool, cc *compliance.ComplianceContext) {
@@ -848,7 +858,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
 	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
@@ -1048,5 +1058,14 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 			report.OutputJSON(allFindings, output)
 		}
 		fmt.Printf("Results saved to %s\n", output)
+	}
+
+	// Generate HTML report
+	if htmlOutput != "" {
+		if err := report.OutputHTML(allFindings, allVerifyResults, urls[0], htmlOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "[!] HTML report error: %v\n", err)
+		} else {
+			fmt.Printf("[*] HTML report saved to %s\n", htmlOutput)
+		}
 	}
 }
