@@ -432,77 +432,10 @@ type FilterInfo struct {
 func detectFilter(line string) FilterInfo {
 	lower := strings.ToLower(line)
 
-	// 1. URL Encoding
-	urlEncoders := []struct {
-		pattern string
-		name    string
-	}{
-		{"encodeuricomponent", "encodeURIComponent"},
-		{"encodeuri", "encodeURI"},
-		{"escape(", "escape()"},
-	}
-	for _, e := range urlEncoders {
-		if strings.Contains(lower, e.pattern) {
-			return FilterInfo{true, "encoding", e.name}
-		}
-	}
-
-	// 2. HTML Encoding
-	htmlEncoders := []struct {
-		pattern string
-		name    string
-	}{
-		{"htmlencode", "htmlEncode"},
-		{"htmlescape", "htmlEscape"},
-		{"escapehtml", "escapeHTML"},
-		{"tohtml", "toHTML"},
-		{"&lt;", "HTML entity"},
-		{"&gt;", "HTML entity"},
-		{"&#", "HTML entity"},
-	}
-	for _, e := range htmlEncoders {
-		if strings.Contains(lower, e.pattern) {
-			return FilterInfo{true, "encoding", e.name}
-		}
-	}
-
-	// 3. Sanitization Libraries
-	sanitizers := []struct {
-		pattern string
-		name    string
-	}{
-		{"dompurify", "DOMPurify"},
-		{"sanitize", "sanitize"},
-		{"xss-filters", "xss-filters"},
-		{"securefilters", "secureFilters"},
-		{"bleach", "bleach"},
-		{"jsoup", "jsoup"},
-		{"antiSamy", "antiSamy"},
-		{"htmlsanitize", "htmlSanitize"},
-	}
-	for _, s := range sanitizers {
-		if strings.Contains(lower, s.pattern) {
-			return FilterInfo{true, "sanitization", s.name}
-		}
-	}
-
-	// 4. Safe DOM Methods (innerText, textContent)
-	safeDOM := []struct {
-		pattern string
-		name    string
-	}{
-		{"innertext", "innerText"},
-		{"textcontent", "textContent"},
-		{"createTextNode", "createTextNode"},
-		{"setattribute", "setAttribute"}, // for non-dangerous attributes
-	}
-	for _, d := range safeDOM {
-		if strings.Contains(lower, d.pattern) {
-			return FilterInfo{true, "dom-safe", d.name}
-		}
-	}
-
-	// 5. Regex-based Filtering (replace with regex)
+	// 1. Regex-based Filtering (FIRST - to detect global vs non-global replace)
+	// Check for global vs non-global replace patterns
+	// Global: replace(/pattern/g, ...) - replaces ALL occurrences
+	// Non-global: replace(/pattern/, ...) - replaces ONLY FIRST occurrence
 	regexFilters := []struct {
 		pattern string
 		name    string
@@ -522,7 +455,87 @@ func detectFilter(line string) FilterInfo {
 	}
 	for _, r := range regexFilters {
 		if strings.Contains(lower, r.pattern) {
+			// Check if this is a global replace (has /g flag)
+			// Look for /g after the pattern
+			patternStart := strings.Index(lower, r.pattern)
+			if patternStart >= 0 {
+				// Look for /g in the regex pattern (e.g., replace(/</g,...)
+				afterPattern := lower[patternStart+len(r.pattern):]
+				if strings.HasPrefix(afterPattern, "g") || strings.HasPrefix(afterPattern, "/g") {
+					return FilterInfo{true, "regex-replace-global", r.name + " (global)"}
+				}
+			}
 			return FilterInfo{true, "regex-replace", r.name}
+		}
+	}
+
+	// 2. URL Encoding
+	urlEncoders := []struct {
+		pattern string
+		name    string
+	}{
+		{"encodeuricomponent", "encodeURIComponent"},
+		{"encodeuri", "encodeURI"},
+		{"escape(", "escape()"},
+	}
+	for _, e := range urlEncoders {
+		if strings.Contains(lower, e.pattern) {
+			return FilterInfo{true, "encoding", e.name}
+		}
+	}
+
+	// 3. HTML Encoding
+	htmlEncoders := []struct {
+		pattern string
+		name    string
+	}{
+		{"htmlencode", "htmlEncode"},
+		{"htmlescape", "htmlEscape"},
+		{"escapehtml", "escapeHTML"},
+		{"tohtml", "toHTML"},
+		{"&lt;", "HTML entity"},
+		{"&gt;", "HTML entity"},
+		{"&#", "HTML entity"},
+	}
+	for _, e := range htmlEncoders {
+		if strings.Contains(lower, e.pattern) {
+			return FilterInfo{true, "encoding", e.name}
+		}
+	}
+
+	// 4. Sanitization Libraries
+	sanitizers := []struct {
+		pattern string
+		name    string
+	}{
+		{"dompurify", "DOMPurify"},
+		{"sanitize", "sanitize"},
+		{"xss-filters", "xss-filters"},
+		{"securefilters", "secureFilters"},
+		{"bleach", "bleach"},
+		{"jsoup", "jsoup"},
+		{"antiSamy", "antiSamy"},
+		{"htmlsanitize", "htmlSanitize"},
+	}
+	for _, s := range sanitizers {
+		if strings.Contains(lower, s.pattern) {
+			return FilterInfo{true, "sanitization", s.name}
+		}
+	}
+
+	// 5. Safe DOM Methods (innerText, textContent)
+	safeDOM := []struct {
+		pattern string
+		name    string
+	}{
+		{"innertext", "innerText"},
+		{"textcontent", "textContent"},
+		{"createTextNode", "createTextNode"},
+		{"setattribute", "setAttribute"}, // for non-dangerous attributes
+	}
+	for _, d := range safeDOM {
+		if strings.Contains(lower, d.pattern) {
+			return FilterInfo{true, "dom-safe", d.name}
 		}
 	}
 

@@ -33,6 +33,19 @@ func suggestPayload(sinkFunc, filterType string) string {
 		}
 	}
 
+	// If non-global tag/angle bracket filtering (only first < is replaced)
+	// Use payloads that don't start with <
+	if strings.Contains(filterLower, "regex strip tags") && !strings.Contains(filterLower, "global") {
+		switch {
+		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
+			return `" onmouseover="alert(1)` // Break out of attribute
+		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
+			return `" onmouseover="alert(1)`
+		default:
+			return `" onmouseover="alert(1)`
+		}
+	}
+
 	// Standard payloads
 	switch {
 	case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
