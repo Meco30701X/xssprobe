@@ -90,8 +90,14 @@ go build -o xssprobe .
 # 静态分析（最快，仅模式匹配）
 ./xssprobe -u https://target.com
 
-# 反射型动态验证（推荐）
+# 反射型动态验证（推荐，全量测试）
 ./xssprobe -u https://target.com -verify
+
+# 快速验证（找到 1 个确认就停）
+./xssprobe -u https://target.com -verify 1
+
+# 测试到 3 个确认就停
+./xssprobe -u https://target.com -verify 3
 
 # 存储型 XSS 检测（默认 dry-run，不提交数据）
 ./xssprobe -u https://target.com -stored
@@ -166,6 +172,9 @@ go build -o xssprobe .
 
 # CI/CD 自动化（跳过法律确认）
 ./xssprobe -u https://target.com -scope target.com -yes
+
+# 使用代理
+./xssprobe -u https://target.com -proxy http://127.0.0.1:7890
 ```
 
 ### 批量扫描
@@ -203,7 +212,7 @@ cat urls.txt | ./xssprobe -verify
 | `-l` | URL 文件路径 | — |
 | `-f` | 本地 JS 文件 | — |
 | `-o` | JSON 输出路径 | — |
-| `-verify` | 启用反射型动态验证 | false |
+| `-verify` | 动态验证（可选参数：`-verify` 全量，`-verify N` 找到 N 个确认就停） | false |
 | `-stored` | 启用存储型 XSS 检测 | false |
 | `-spa` | SPA 渲染模式 | false |
 | `-crawl` | 自动爬虫 | false |
@@ -234,6 +243,8 @@ cat urls.txt | ./xssprobe -verify
 | `-confirm` | 每次提交前确认 | false |
 | `-yes` | 跳过法律确认（需配合 `-scope`） | false |
 | `-disable-cors` | 禁用浏览器同源策略 | false |
+| `-proxy` | HTTP 代理 URL（如 `http://127.0.0.1:7890`） | — |
+| `-version` | 显示版本号并退出 | false |
 
 ## 检测原理
 
@@ -247,11 +258,16 @@ Source: location.hash → var hash → var data → Sink: innerHTML
 
 ### 动态验证
 
-使用 chromedp 无头浏览器加载页面，注入带有唯一标识符的 payload，通过以下方式验证：
+使用 chromedp 无头浏览器加载页面，注入 payload，通过以下方式验证：
 
-- **Hash/Query 模式**: payload 注入 URL hash 或 query 参数，检查是否在 DOM 中反射
-- **Canary 探测**: 发送探测字符串，分析反射位置和上下文
+- **alert 弹窗触发** — 最可靠的确认方式
+- **JavaScript 执行确认** — 检测 `window.xssTriggered` 是否被设置
+- **Canary 可执行位置** — 检查 Canary 是否在 `<script>` 标签或事件处理器中
 - **存储型**: 填写表单提交 → 刷新页面 → 检查 payload 是否持久化
+
+**验证模式**：
+- `-verify` — 全量测试所有 payload
+- `-verify N` — 找到 N 个确认的 payload 后停止（快速验证）
 
 ### 上下文感知
 
