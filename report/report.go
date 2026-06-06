@@ -96,24 +96,124 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 			fmt.Printf("    Confidence: %s\n", f.Confidence)
 		}
 
-		// Show actionable injection details for URL-parameter-based findings
-		paramName := extractParamName(f.Source)
-		if paramName != "" && targetPage != "" {
-			payload := suggestPayload(f.Sink)
+		// Show actionable injection details based on source type
+		payload := suggestPayload(f.Sink)
+		printInjectionDetails(f.Source, payload, targetPage)
+
+		fmt.Println()
+	}
+}
+
+// printInjectionDetails shows actionable injection information based on the source type
+func printInjectionDetails(source, payload, targetPage string) {
+	lower := strings.ToLower(source)
+
+	// 1. URL parameter injection (via getUrl, getParameter, etc.)
+	if paramName := extractParamName(source); paramName != "" {
+		if targetPage != "" {
 			injectionURL := buildInjectionURL(targetPage, paramName, payload)
 			if injectionURL != "" {
 				fmt.Printf("\n    🔗 Injection URL:\n       %s\n", injectionURL)
 				fmt.Printf("    💡 Suggested payload: %s\n", payload)
 				fmt.Printf("    📌 Parameter: %s\n", paramName)
 			}
-		} else if paramName != "" {
-			// No page URL available (standalone JS scan), just show parameter and payload
-			payload := suggestPayload(f.Sink)
+		} else {
 			fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
 			fmt.Printf("    📌 Parameter: %s (append ?%s=<payload> to page URL)\n", paramName, paramName)
 		}
+		return
+	}
 
-		fmt.Println()
+	// 2. Hash injection (#payload)
+	if strings.Contains(lower, "hash") {
+		if targetPage != "" {
+			fmt.Printf("\n    🔗 Injection URL:\n       %s#%s\n", targetPage, payload)
+			fmt.Printf("    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: URL fragment (#)\n")
+		} else {
+			fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: URL fragment (append #<payload> to URL)\n")
+		}
+		return
+	}
+
+	// 3. Query string injection (location.search)
+	if strings.Contains(lower, "search") || strings.Contains(lower, "query") {
+		if targetPage != "" {
+			fmt.Printf("\n    🔗 Injection URL:\n       %s?%s\n", targetPage, payload)
+			fmt.Printf("    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: Query string\n")
+		} else {
+			fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: Query string (append ?<payload> to URL)\n")
+		}
+		return
+	}
+
+	// 4. Cookie injection
+	if strings.Contains(lower, "cookie") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: Cookie\n")
+		fmt.Printf("    📝 How to inject:\n")
+		fmt.Printf("       document.cookie = \"vulnerable=%s\"\n", payload)
+		fmt.Printf("       Or via HTTP header: Cookie: vulnerable=%s\n", payload)
+		return
+	}
+
+	// 5. Storage injection (localStorage/sessionStorage)
+	if strings.Contains(lower, "localstorage") || strings.Contains(lower, "sessionstorage") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: Web Storage\n")
+		fmt.Printf("    📝 How to inject:\n")
+		fmt.Printf("       localStorage.setItem('vulnerable', '%s')\n", payload)
+		return
+	}
+
+	// 6. postMessage injection
+	if strings.Contains(lower, "postmessage") || strings.Contains(lower, "message") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: postMessage\n")
+		fmt.Printf("    📝 How to inject:\n")
+		fmt.Printf("       window.postMessage('%s', '*')\n", payload)
+		return
+	}
+
+	// 7. Document URL/referrer injection
+	if strings.Contains(lower, "document.url") || strings.Contains(lower, "document.documenturi") ||
+		strings.Contains(lower, "document.referrer") || strings.Contains(lower, "document.baseuri") {
+		if targetPage != "" {
+			fmt.Printf("\n    🔗 Injection URL:\n       %s?%s\n", targetPage, payload)
+			fmt.Printf("    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: URL (via document.URL/referrer)\n")
+		} else {
+			fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+			fmt.Printf("    📌 Injection point: URL (navigate to page with payload in URL)\n")
+		}
+		return
+	}
+
+	// 8. window.name injection
+	if strings.Contains(lower, "window.name") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: window.name\n")
+		fmt.Printf("    📝 How to inject:\n")
+		fmt.Printf("       window.name = '%s'\n", payload)
+		fmt.Printf("       Or via: <a href=\"target.html\" target=\"victim\">click</a>\n")
+		return
+	}
+
+	// 9. Form input injection
+	if strings.Contains(lower, "element.value") || strings.Contains(lower, "form") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: Form input\n")
+		fmt.Printf("    📝 How to inject: Submit form with payload in input field\n")
+		return
+	}
+
+	// 10. Unknown source - show generic guidance
+	if source != "unknown" && !strings.Contains(lower, "unknown") {
+		fmt.Printf("\n    💡 Suggested payload: %s\n", payload)
+		fmt.Printf("    📌 Injection point: %s\n", source)
 	}
 }
 
