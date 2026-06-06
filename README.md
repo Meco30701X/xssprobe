@@ -90,8 +90,11 @@ go build -o xssprobe .
 # 静态分析（最快，仅模式匹配）
 ./xssprobe -u https://target.com
 
-# 反射型动态验证（推荐，全量测试）
+# 反射型动态验证（推荐，测试高成功率 payload）
 ./xssprobe -u https://target.com -verify
+
+# 全量测试（测试所有 payload，较慢）
+./xssprobe -u https://target.com -verify all
 
 # 快速验证（找到 1 个确认就停）
 ./xssprobe -u https://target.com -verify 1
@@ -212,7 +215,7 @@ cat urls.txt | ./xssprobe -verify
 | `-l` | URL 文件路径 | — |
 | `-f` | 本地 JS 文件 | — |
 | `-o` | JSON 输出路径 | — |
-| `-verify` | 动态验证（可选参数：`-verify` 全量，`-verify N` 找到 N 个确认就停） | false |
+| `-verify` | 动态验证（`-verify` 高成功率，`-verify all` 全量，`-verify N` 找到 N 个就停） | false |
 | `-stored` | 启用存储型 XSS 检测 | false |
 | `-spa` | SPA 渲染模式 | false |
 | `-crawl` | 自动爬虫 | false |
@@ -266,8 +269,9 @@ Source: location.hash → var hash → var data → Sink: innerHTML
 - **存储型**: 填写表单提交 → 刷新页面 → 检查 payload 是否持久化
 
 **验证模式**：
-- `-verify` — 全量测试所有 payload
-- `-verify N` — 找到 N 个确认的 payload 后停止（快速验证）
+- `-verify` — 测试高成功率 payload（默认，约 15 个，快速）
+- `-verify all` — 测试所有 payload（全量，较慢）
+- `-verify N` — 找到 N 个确认的 payload 后停止
 
 ### 上下文感知
 
