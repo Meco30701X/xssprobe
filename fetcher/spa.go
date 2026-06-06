@@ -65,6 +65,9 @@ func FetchPageSPA(targetURL string, config *SPAConfig) (*SPAResult, error) {
 	if disableCORSFlag {
 		opts = append(opts, chromedp.Flag("disable-web-security", true))
 	}
+	if proxyURL != "" {
+		opts = append(opts, chromedp.Flag("proxy-server", proxyURL))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()

@@ -19,6 +19,7 @@ type Config struct {
 	MaxDepth    int           // Max link depth
 	Timeout     time.Duration // Per-page timeout
 	SameDomain  bool          // Only crawl same domain
+	Proxy       string        // HTTP proxy URL
 	AuthCookies []string
 	Headers     map[string]string
 	Compliance  *compliance.ComplianceContext // Compliance checks
@@ -142,6 +143,9 @@ func (c *Crawler) crawlPage(pageURL string, depth int) {
 		chromedp.Flag("enable-javascript", true),
 		chromedp.UserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"),
 	)
+	if c.config.Proxy != "" {
+		opts = append(opts, chromedp.Flag("proxy-server", c.config.Proxy))
+	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
 	defer allocCancel()

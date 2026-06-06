@@ -73,6 +73,7 @@ func main() {
 	respectRobots := flag.Bool("respect-robots", true, "Respect robots.txt rules")
 	skipLegal := flag.Bool("yes", false, "Skip legal confirmation (for CI/CD automation)")
 	disableCORS := flag.Bool("disable-cors", false, "Disable browser same-origin policy (use with caution)")
+	proxy := flag.String("proxy", "", "HTTP proxy URL (e.g. http://127.0.0.1:7890)")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
@@ -184,6 +185,13 @@ func main() {
 	verifier.SetDisableCORS(*disableCORS)
 	fetcher.SetDisableCORS(*disableCORS)
 
+	// Set proxy
+	if *proxy != "" {
+		fmt.Printf("[*] Proxy: %s\n", *proxy)
+		fetcher.SetProxy(*proxy)
+		verifier.SetProxy(*proxy)
+	}
+
 	fmt.Printf("[*] Compliance: scope=%s, rate=%d/s, robots=%v\n",
 		*scope, *rateLimit, *respectRobots)
 	if *auditLog != "" {
@@ -198,6 +206,7 @@ func main() {
 		crawlConfig.MaxPages = *maxPages
 		crawlConfig.MaxDepth = *maxDepth
 		crawlConfig.Compliance = complianceCtx
+		crawlConfig.Proxy = *proxy
 		if auth != nil {
 			crawlConfig.AuthCookies = auth.Cookies
 			crawlConfig.Headers = auth.Headers
@@ -342,6 +351,7 @@ func printUsage() {
 	fmt.Println("  -wait       Wait time for SPA rendering in seconds (default: 5)")
 	fmt.Println("  -cookie     Cookie string for auth")
 	fmt.Println("  -H          Custom header (repeatable)")
+	fmt.Println("  -proxy      HTTP proxy URL (e.g. http://127.0.0.1:7890)")
 	fmt.Println()
 	fmt.Println("Safety Flags (for stored XSS):")
 	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (default for -stored)")

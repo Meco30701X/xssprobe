@@ -4,21 +4,44 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 )
 
-// FetchPage fetches a URL and returns the HTML content
-func FetchPage(url string) (string, error) {
+// proxyURL stores the HTTP proxy URL (empty = no proxy)
+var proxyURL string
+
+// SetProxy sets the HTTP proxy for all requests
+func SetProxy(proxy string) {
+	proxyURL = proxy
+}
+
+// httpClient creates an http.Client with optional proxy
+func httpClient() *http.Client {
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(url)
+	if proxyURL != "" {
+		proxy, err := url.Parse(proxyURL)
+		if err == nil {
+			client.Transport = &http.Transport{
+				Proxy: http.ProxyURL(proxy),
+			}
+		}
+	}
+	return client
+}
+
+// FetchPage fetches a URL and returns the HTML content
+func FetchPage(fetchURL string) (string, error) {
+	client := httpClient()
+	resp, err := client.Get(fetchURL)
 	if err != nil {
-		return "", fmt.Errorf("failed to fetch %s: %w", url, err)
+		return "", fmt.Errorf("failed to fetch %s: %w", fetchURL, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, fetchURL)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024)) // 10MB limit
@@ -54,12 +77,26 @@ func ExtractScriptURLs(html string, baseURL string) []string {
 	var urls []string
 	for _, m := range matches {
 		if len(m) > 1 {
-			url := m[1]
-			// Handle relative URLs
-			if len(url) > 0 && url[0] == '/' {
-				url = baseURL + url
+			u := m[1]
+			if len(u) == 0 {
+				continue
 			}
-			urls = append(urls, url)
+			// Handle relative URLs
+			if u[0] == '/' {
+				// Absolute path: prepend origin
+				parsed, err := url.Parse(baseURL)
+				if err == nil {
+					u = parsed.Scheme + "://" + parsed.Host + u
+				}
+			} else if u[0] != 'h' {
+				// Relative path: resolve against base URL
+				parsed, err := url.Parse(baseURL)
+				if err == nil {
+					resolved := parsed.ResolveReference(&url.URL{Path: u})
+					u = resolved.String()
+				}
+			}
+			urls = append(urls, u)
 		}
 	}
 	return urls

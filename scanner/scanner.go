@@ -275,6 +275,7 @@ func getSources() []pattern {
 		{"fetch", regexp.MustCompile(`fetch\s*\(|\.then\s*\(|\.json\s*\(`)},
 		{"URL", regexp.MustCompile(`new\s+URL\s*\(|URL\.parse|URLSearchParams`)},
 		{"FormData", regexp.MustCompile(`FormData|\.get\s*\(|\.getAll\s*\(`)},
+		{"URL helper functions", regexp.MustCompile(`getUrl\s*\(|getParameter\s*\(|getQueryVariable\s*\(|getQuery\s*\(|param\s*\(|qs\s*\(|getQueryParam\s*\(`)},
 
 		// === DOM Element Sources ===
 		{"element.value", regexp.MustCompile(`\.value\b`)},

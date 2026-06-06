@@ -40,6 +40,14 @@ func SetDisableCORS(disable bool) {
 	disableCORSFlag = disable
 }
 
+// proxyURL stores the HTTP proxy URL
+var proxyFlag string
+
+// SetProxy sets the HTTP proxy for chromedp
+func SetProxy(proxy string) {
+	proxyFlag = proxy
+}
+
 // PayloadConfig holds custom payload configuration (thread-safe)
 type PayloadConfig struct {
 	CustomPayloads []payloads.Payload
@@ -157,6 +165,9 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 	)
 	if disableCORS {
 		opts = append(opts, chromedp.Flag("disable-web-security", true))
+	}
+	if proxyFlag != "" {
+		opts = append(opts, chromedp.Flag("proxy-server", proxyFlag))
 	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
