@@ -23,6 +23,8 @@ import (
 	wafpkg "github.com/Meco30701X/xssprobe/waf"
 )
 
+const version = "1.1.0"
+
 type headerFlags map[string]string
 
 func (h headerFlags) String() string { return fmt.Sprintf("%v", map[string]string(h)) }
@@ -74,9 +76,16 @@ func main() {
 	skipLegal := flag.Bool("yes", false, "Skip legal confirmation (for CI/CD automation)")
 	disableCORS := flag.Bool("disable-cors", false, "Disable browser same-origin policy (use with caution)")
 	proxy := flag.String("proxy", "", "HTTP proxy URL (e.g. http://127.0.0.1:7890)")
+	showVersion := flag.Bool("version", false, "Show version and exit")
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
+
+	// Version check
+	if *showVersion {
+		fmt.Printf("xssprobe %s\n", version)
+		os.Exit(0)
+	}
 
 	// Legal confirmation
 	if !compliance.ConfirmLegalUsage(*skipLegal) {
@@ -170,6 +179,7 @@ func main() {
 		RateLimit:     *rateLimit,
 		AuditLogPath:  *auditLog,
 		RespectRobots: *respectRobots,
+		Version:       version,
 	}
 	complianceCtx, err := compliance.NewCompliance(complianceCfg)
 	if err != nil {

@@ -12,6 +12,7 @@ type ComplianceConfig struct {
 	RateLimit     int    // Requests per second
 	AuditLogPath  string // Path to audit log file
 	RespectRobots bool   // Whether to respect robots.txt
+	Version       string // Application version for audit log
 }
 
 // ComplianceContext manages all compliance checks
@@ -32,7 +33,7 @@ func NewCompliance(cfg ComplianceConfig) (*ComplianceContext, error) {
 
 	// Setup audit logger if path specified
 	if cfg.AuditLogPath != "" {
-		logger, err := NewAuditLogger(cfg.AuditLogPath)
+		logger, err := NewAuditLogger(cfg.AuditLogPath, cfg.Version)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create audit log: %v", err)
 		}

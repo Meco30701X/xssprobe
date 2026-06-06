@@ -26,7 +26,7 @@ type AuditLogger struct {
 }
 
 // NewAuditLogger creates a new audit logger writing to the given path
-func NewAuditLogger(path string) (*AuditLogger, error) {
+func NewAuditLogger(path string, appVersion string) (*AuditLogger, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
@@ -36,7 +36,7 @@ func NewAuditLogger(path string) (*AuditLogger, error) {
 	header := map[string]string{
 		"event":     "audit_start",
 		"timestamp": time.Now().Format(time.RFC3339),
-		"version":   "1.0",
+		"version":   appVersion,
 	}
 	encoder := json.NewEncoder(file)
 	encoder.Encode(header)
