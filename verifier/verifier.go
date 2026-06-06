@@ -219,6 +219,31 @@ func extractDomain(ctx context.Context) string {
 	return ""
 }
 
+// BrowserPool manages a reusable Chrome browser instance
+type BrowserPool struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	auth   *AuthConfig
+}
+
+// NewBrowserPool creates a new browser pool
+func NewBrowserPool(auth *AuthConfig) *BrowserPool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	taskCtx, _ := newChromeContext(ctx, auth, disableCORSFlag)
+	return &BrowserPool{
+		ctx:    taskCtx,
+		cancel: cancel,
+		auth:   auth,
+	}
+}
+
+// Close closes the browser pool
+func (p *BrowserPool) Close() {
+	if p.cancel != nil {
+		p.cancel()
+	}
+}
+
 // VerifyURL tests a URL for reflected DOM XSS
 func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int) []VerifyResult {
 	// Default parameters for backward compatibility
@@ -246,9 +271,13 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 		params = []string{"q", "search", "id", "page", "input", "name", "s"}
 	}
 
+	// Create browser pool for reuse
+	pool := NewBrowserPool(auth)
+	defer pool.Close()
+
 	for _, payload := range testPayloads {
 		// Test hash fragment
-		r := testHash(targetURL, payload, auth, limiter)
+		r := testHashWithPool(pool, targetURL, payload, limiter)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -256,7 +285,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 
 		// Test each parameter
 		for _, param := range params {
-			r = testSearchParam(targetURL, param, payload, auth, limiter)
+			r = testSearchParamWithPool(pool, targetURL, param, payload, limiter)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -271,10 +300,14 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int) []VerifyResult {
 	var results []VerifyResult
 
+	// Create browser pool for reuse
+	pool := NewBrowserPool(auth)
+	defer pool.Close()
+
 	// Test hash fragment with default payloads
 	testPayloads := getTestPayloads(waf, config)
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
-		r := testHash(targetURL, payload, auth, limiter)
+		r := testHashWithPool(pool, targetURL, payload, limiter)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -292,7 +325,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		fmt.Printf("    Testing '%s' (context: %s) with %d payloads\n", param, ctxType, len(contextPayloads))
 
 		for _, payload := range contextPayloads {
-			r := testSearchParam(targetURL, param, payload, auth, limiter)
+			r := testSearchParamWithPool(pool, targetURL, param, payload, limiter)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -356,6 +389,57 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
 	} else if result.Triggered {
 		// alert() dialog was triggered - already set by event listener
+	} else if strings.Contains(domContent, Canary) {
+		if isCanaryExecutable(domContent, Canary) {
+			result.Triggered = true
+			result.Detail = "Canary in executable position (script/event handler)"
+		} else {
+			result.Triggered = false
+			result.Detail = "Input reflected but not in executable position"
+		}
+	}
+
+	return result
+}
+
+func testHashWithPool(pool *BrowserPool, baseURL, payload string, limiter *compliance.RateLimiter) VerifyResult {
+	result := VerifyResult{Payload: payload, Source: "hash"}
+	testURL := baseURL + "#" + url.QueryEscape(payload)
+
+	if limiter != nil {
+		limiter.Wait()
+	}
+
+	chromedp.ListenTarget(pool.ctx, func(ev interface{}) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			result.Triggered = true
+			result.Detail = "alert() dialog triggered"
+		}
+	})
+
+	var domContent string
+	var jsTriggered bool
+
+	err := chromedp.Run(pool.ctx,
+		chromedp.Navigate(testURL),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
+		chromedp.InnerHTML("html", &domContent),
+	)
+
+	if err != nil {
+		if result.Triggered {
+			return result
+		}
+		result.Detail = "navigation error: " + err.Error()
+		return result
+	}
+
+	if jsTriggered {
+		result.Triggered = true
+		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
+	} else if result.Triggered {
+		// alert() dialog was triggered
 	} else if strings.Contains(domContent, Canary) {
 		if isCanaryExecutable(domContent, Canary) {
 			result.Triggered = true
@@ -434,6 +518,67 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *
 			result.Detail = "Canary in executable position (script/event handler)"
 		} else {
 			// Canary is just reflected text, not executable XSS
+			result.Triggered = false
+			result.Detail = "Input reflected but not in executable position"
+		}
+	}
+
+	return result
+}
+
+func testSearchParamWithPool(pool *BrowserPool, baseURL, param, payload string, limiter *compliance.RateLimiter) VerifyResult {
+	result := VerifyResult{Payload: payload, Source: "search:" + param}
+
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		result.Detail = "invalid URL"
+		return result
+	}
+
+	q := parsedURL.Query()
+	q.Set(param, payload)
+	parsedURL.RawQuery = q.Encode()
+	testURL := parsedURL.String()
+
+	if limiter != nil {
+		limiter.Wait()
+	}
+
+	chromedp.ListenTarget(pool.ctx, func(ev interface{}) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			result.Triggered = true
+			result.Detail = "alert() dialog triggered"
+		}
+	})
+
+	var domContent string
+	var jsTriggered bool
+
+	err = chromedp.Run(pool.ctx,
+		chromedp.Navigate(testURL),
+		chromedp.Sleep(2*time.Second),
+		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
+		chromedp.InnerHTML("html", &domContent),
+	)
+
+	if err != nil {
+		if result.Triggered {
+			return result
+		}
+		result.Detail = "navigation error: " + err.Error()
+		return result
+	}
+
+	if jsTriggered {
+		result.Triggered = true
+		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
+	} else if result.Triggered {
+		// alert() dialog was triggered
+	} else if strings.Contains(domContent, Canary) {
+		if isCanaryExecutable(domContent, Canary) {
+			result.Triggered = true
+			result.Detail = "Canary in executable position (script/event handler)"
+		} else {
 			result.Triggered = false
 			result.Detail = "Input reflected but not in executable position"
 		}
