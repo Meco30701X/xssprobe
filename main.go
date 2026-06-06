@@ -564,7 +564,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 		}
 	}
 
-	report.PrintFindings(allFindings, targetURL)
+	report.PrintFindings(allFindings, targetURL, targetURL)
 
 	// WAF Auto-Detection
 	if autoWAF && wafType == "" && doVerify {
