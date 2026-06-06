@@ -35,6 +35,12 @@ func NewTaintTracker() *TaintTracker {
 // assignRe matches: var/let/const x = ... or x = ...
 var assignRe = regexp.MustCompile(`(?:(?:var|let|const)\s+)?(\w+)\s*=\s*(.+)`)
 
+// concatRe matches string concatenation: 'str' + var or var + 'str'
+var concatRe = regexp.MustCompile(`['"]\s*\+\s*(\w+)|(\w+)\s*\+\s*['"]`)
+
+// templateRe matches template literals: `str ${var} str`
+var templateRe = regexp.MustCompile(`\$\{(\w+)\}`)
+
 // TrackLine updates the taint map based on variable assignments
 func (t *TaintTracker) TrackLine(line string) {
 	matches := assignRe.FindStringSubmatch(line)
@@ -51,6 +57,7 @@ func (t *TaintTracker) TrackLine(line string) {
 		t.filteredVars[varName] = filterInfo
 	}
 
+	// Check if value directly contains a source
 	for _, src := range getSources() {
 		if src.Re.MatchString(value) {
 			t.taintedVars[varName] = src.Name
@@ -58,7 +65,38 @@ func (t *TaintTracker) TrackLine(line string) {
 		}
 	}
 
-	// Check if RHS contains a tainted variable
+	// Check for string concatenation: 'str' + taintedVar or taintedVar + 'str'
+	concatMatches := concatRe.FindStringSubmatch(value)
+	if concatMatches != nil {
+		concatVar := concatMatches[1]
+		if concatVar == "" {
+			concatVar = concatMatches[2]
+		}
+		if sourceName, ok := t.taintedVars[concatVar]; ok && concatVar != varName {
+			t.taintedVars[varName] = sourceName + "(via concat " + concatVar + ")"
+			if filter, ok := t.filteredVars[concatVar]; ok {
+				t.filteredVars[varName] = filter
+			}
+			return
+		}
+	}
+
+	// Check for template literals: `str ${taintedVar} str`
+	templateMatches := templateRe.FindAllStringSubmatch(value, -1)
+	for _, tm := range templateMatches {
+		if len(tm) > 1 {
+			templateVar := tm[1]
+			if sourceName, ok := t.taintedVars[templateVar]; ok && templateVar != varName {
+				t.taintedVars[varName] = sourceName + "(via template " + templateVar + ")"
+				if filter, ok := t.filteredVars[templateVar]; ok {
+					t.filteredVars[varName] = filter
+				}
+				return
+			}
+		}
+	}
+
+	// Check if RHS contains a tainted variable (simple containment)
 	// e.g. var y = x; where x is tainted
 	for taintedVar, sourceName := range t.taintedVars {
 		// Skip self-references (e.g., putDiv = putDiv.replace(...))
@@ -444,18 +482,53 @@ func detectFilter(line string) FilterInfo {
 		pattern string
 		name    string
 	}{
+		// Tag/HTML injection filters
 		{"replace(/<", "regex strip tags"},
 		{"replace(/>", "regex strip tags"},
 		{"replace(/script", "regex strip script"},
 		{"replace(/on\\w+", "regex strip events"},
 		{"replace(/javascript:", "regex strip js protocol"},
 		{".replace(.*<.*>)", "regex strip tags"},
+
+		// Character class filters
 		{"replace(/[()`]", "regex strip parentheses and backticks"},
 		{"replace(/\\(", "regex strip parentheses"},
 		{"replace(/\\)", "regex strip parentheses"},
 		{"replace(/['\"]", "regex strip quotes"},
 		{"replace(/\\s", "regex strip whitespace"},
 		{"replace(/\\w", "regex strip word chars"},
+		{"replace(/\\d", "regex strip digits"},
+		{"replace(/\\b", "regex strip word boundaries"},
+
+		// Multi-character class filters
+		{"replace(/[<>\"']", "regex strip html special chars"},
+		{"replace(/[<>\"'()]", "regex strip html and parentheses"},
+		{"replace(/[<>\"'()`]", "regex strip html parentheses and backticks"},
+		{"replace(/[<>&\"']", "regex strip html entities"},
+		{"replace(/[^a-z]", "regex whitelist lowercase"},
+		{"replace(/[^a-z0-9]", "regex whitelist alphanumeric"},
+		{"replace(/[^\\w]", "regex strip non-word"},
+		{"replace(/[^\\w\\s]", "regex strip non-word-space"},
+
+		// Specific payload filters
+		{"replace(/alert", "regex strip alert"},
+		{"replace(/prompt", "regex strip prompt"},
+		{"replace(/confirm", "regex strip confirm"},
+		{"replace(/eval", "regex strip eval"},
+		{"replace(/document", "regex strip document"},
+		{"replace(/window", "regex strip window"},
+		{"replace(/location", "regex strip location"},
+
+		// Encoding/obfuscation filters
+		{"replace(/\\\\x", "regex strip hex escapes"},
+		{"replace(/\\\\u", "regex strip unicode escapes"},
+		{"replace(/\\\\[0-7]", "regex strip octal escapes"},
+		{"replace(/%[0-9a-f]", "regex strip url encoding"},
+
+		// Double encoding detection
+		{"replace(/&lt;", "regex strip html entity lt"},
+		{"replace(/&gt;", "regex strip html entity gt"},
+		{"replace(/&#", "regex strip html numeric entity"},
 	}
 	for _, r := range regexFilters {
 		if strings.Contains(lower, r.pattern) {
