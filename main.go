@@ -646,11 +646,16 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			}
 
 			paramContexts := make(map[string]string)
+			domXSSParams := []string{} // Parameters that might be DOM XSS (not reflected in HTML)
+
 			for _, param := range paramNames {
 				ctxResult := ctxpkg.DetectContext(targetURL, param, cookies, customHeaders)
 				ctxpkg.PrintContextResult(ctxResult, param)
 				if ctxResult.Reflected {
 					paramContexts[param] = string(ctxResult.Context)
+				} else {
+					// Parameter not reflected - might be DOM XSS (processed by JS)
+					domXSSParams = append(domXSSParams, param)
 				}
 			}
 
@@ -659,8 +664,18 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
-			} else {
-				fmt.Println("[*] No parameters reflected - testing with default payloads")
+			}
+
+			// Always test DOM XSS parameters with chromedp (they're processed by JS, not reflected in HTML)
+			if len(domXSSParams) > 0 {
+				fmt.Printf("\n[*] Testing %d DOM XSS parameters (not reflected in HTML)...\n", len(domXSSParams))
+				results := verifier.VerifyURLWithParams(targetURL, auth, effectiveWAF, domXSSParams, cc.Limiter, payloadCfg)
+				allVerifyResults = append(allVerifyResults, results...)
+				verifier.PrintResults(results)
+			}
+
+			if len(paramContexts) == 0 && len(domXSSParams) == 0 {
+				fmt.Println("[*] No parameters found - testing with default payloads")
 				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
