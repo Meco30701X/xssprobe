@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -318,6 +319,11 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 	)
 
 	if err != nil {
+		// Check if alert was triggered before the error
+		if result.Triggered {
+			// alert() was triggered - this is a confirmed XSS
+			return result
+		}
 		result.Detail = "navigation error: " + err.Error()
 		return result
 	}
@@ -325,9 +331,16 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 	if jsTriggered {
 		result.Triggered = true
 		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
+	} else if result.Triggered {
+		// alert() dialog was triggered - already set by event listener
 	} else if strings.Contains(domContent, Canary) {
-		result.Triggered = true
-		result.Detail = "Canary string found in DOM (HTML injection confirmed)"
+		if isCanaryExecutable(domContent, Canary) {
+			result.Triggered = true
+			result.Detail = "Canary in executable position (script/event handler)"
+		} else {
+			result.Triggered = false
+			result.Detail = "Input reflected but not in executable position"
+		}
 	}
 
 	return result
@@ -375,19 +388,68 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *
 	)
 
 	if err != nil {
+		// Check if alert was triggered before the error
+		if result.Triggered {
+			// alert() was triggered - this is a confirmed XSS
+			return result
+		}
 		result.Detail = "navigation error: " + err.Error()
 		return result
 	}
 
 	if jsTriggered {
 		result.Triggered = true
-		result.Detail = "JavaScript execution confirmed"
+		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
+	} else if result.Triggered {
+		// alert() dialog was triggered - already set by event listener
+		// Keep existing detail
 	} else if strings.Contains(domContent, Canary) {
-		result.Triggered = true
-		result.Detail = "Canary string found in DOM"
+		// Canary found in DOM - but is it in an executable position?
+		// Check if canary is inside <script> tags or event handlers
+		if isCanaryExecutable(domContent, Canary) {
+			result.Triggered = true
+			result.Detail = "Canary in executable position (script/event handler)"
+		} else {
+			// Canary is just reflected text, not executable XSS
+			result.Triggered = false
+			result.Detail = "Input reflected but not in executable position"
+		}
 	}
 
 	return result
+}
+
+// isCanaryExecutable checks if the canary is in a position where it can execute JavaScript
+func isCanaryExecutable(domContent, canary string) bool {
+	// Check if canary is inside <script> tags
+	// Pattern: <script>...canary...</script>
+	scriptPattern := regexp.MustCompile(`(?i)<script[^>]*>.*?` + regexp.QuoteMeta(canary) + `.*?</script>`)
+	if scriptPattern.MatchString(domContent) {
+		return true
+	}
+
+	// Check if canary is inside event handler attributes (on*)
+	// Pattern: on*="...canary..."
+	eventPattern := regexp.MustCompile(`(?i)\bon\w+\s*=\s*["'][^"']*` + regexp.QuoteMeta(canary) + `[^"']*["']`)
+	if eventPattern.MatchString(domContent) {
+		return true
+	}
+
+	// Check if canary is inside javascript: URLs
+	// Pattern: href="javascript:...canary..." or src="javascript:..."
+	jsURLPattern := regexp.MustCompile(`(?i)(?:href|src|action)\s*=\s*["']javascript:[^"']*` + regexp.QuoteMeta(canary) + `[^"']*["']`)
+	if jsURLPattern.MatchString(domContent) {
+		return true
+	}
+
+	// Check if canary is inside style attributes with expression()
+	// Pattern: style="...expression(canary)..."
+	stylePattern := regexp.MustCompile(`(?i)style\s*=\s*["'][^"']*expression\s*\([^)]*` + regexp.QuoteMeta(canary) + `[^)]*\)[^"']*["']`)
+	if stylePattern.MatchString(domContent) {
+		return true
+	}
+
+	return false
 }
 
 // VerifyStoredXSS tests for stored DOM XSS with safety controls
