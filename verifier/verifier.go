@@ -220,14 +220,14 @@ func extractDomain(ctx context.Context) string {
 }
 
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, stopOnFirst bool) []VerifyResult {
 	// Default parameters for backward compatibility
 	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
-	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config)
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config, stopOnFirst)
 }
 
 // VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
-func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig, stopOnFirst bool) []VerifyResult {
 	var results []VerifyResult
 	testPayloads := getTestPayloads(waf, config)
 
@@ -239,11 +239,17 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 		// Test hash fragment
 		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
+		if stopOnFirst && r.Triggered {
+			return results
+		}
 
 		// Test each parameter
 		for _, param := range params {
 			r = testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
+			if stopOnFirst && r.Triggered {
+				return results
+			}
 		}
 	}
 
@@ -251,7 +257,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 }
 
 // VerifyURLWithContext tests a URL with context-aware payload selection
-func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, stopOnFirst bool) []VerifyResult {
 	var results []VerifyResult
 
 	// Test hash fragment with default payloads
@@ -259,6 +265,9 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
 		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
+		if stopOnFirst && r.Triggered {
+			return results
+		}
 	}
 
 	// Test each parameter with context-aware payloads
@@ -274,6 +283,9 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		for _, payload := range contextPayloads {
 			r := testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
+			if stopOnFirst && r.Triggered {
+				return results
+			}
 		}
 	}
 

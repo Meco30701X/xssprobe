@@ -59,6 +59,7 @@ func main() {
 	analyze := flag.Bool("analyze", false, "Combined static+dynamic analysis (lower false positives)")
 	maxVerify := flag.Int("max-verify", 10, "Max findings to verify dynamically (with -analyze)")
 	skipFiltered := flag.Bool("skip-filtered", false, "Skip findings with detected filtering (with -analyze)")
+	fastVerify := flag.Bool("fast-verify", false, "Stop after first confirmed payload (faster)")
 	// Parameter mining flags
 	paramFlag := flag.String("param", "", "Comma-separated parameter names to test (e.g. \"id,name,email\")")
 	mineParams := flag.Bool("mine", true, "Auto-discover parameters from HTML/JS (default: true)")
@@ -318,11 +319,11 @@ func main() {
 			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
 		} else {
 			scanURL(urls[0], auth, *waf, *verify, *stored, *spa, *waitTime, *output, safetyMode, complianceCtx,
-				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
+				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *fastVerify)
 		}
 	} else if len(urls) > 1 {
 		scanBatch(urls, auth, *waf, *verify, *stored, *spa, *waitTime, *output, *threads, safetyMode, complianceCtx,
-			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
+			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *fastVerify)
 	}
 }
 
@@ -460,7 +461,7 @@ func scanLocalFile(filename, output string) {
 }
 
 func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify, doStored, doSPA bool, waitTime int, output string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
+	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst, fastVerify bool) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
 	var pageHTML string // store HTML for parameter mining
@@ -661,7 +662,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 
 			if len(paramContexts) > 0 {
 				fmt.Printf("\n[*] Testing %d reflected parameters with context-aware payloads...\n", len(paramContexts))
-				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg)
+				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg, fastVerify)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
@@ -669,20 +670,20 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			// Always test DOM XSS parameters with chromedp (they're processed by JS, not reflected in HTML)
 			if len(domXSSParams) > 0 {
 				fmt.Printf("\n[*] Testing %d DOM XSS parameters (not reflected in HTML)...\n", len(domXSSParams))
-				results := verifier.VerifyURLWithParams(targetURL, auth, effectiveWAF, domXSSParams, cc.Limiter, payloadCfg)
+				results := verifier.VerifyURLWithParams(targetURL, auth, effectiveWAF, domXSSParams, cc.Limiter, payloadCfg, fastVerify)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 
 			if len(paramContexts) == 0 && len(domXSSParams) == 0 {
 				fmt.Println("[*] No parameters found - testing with default payloads")
-				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg)
+				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, fastVerify)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 		} else {
 			// Fallback to default params
-			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg)
+			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, fastVerify)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		}
@@ -803,7 +804,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 }
 
 func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify, doStored, doSPA bool, waitTime int, output string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
+	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst, fastVerify bool) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -947,9 +948,9 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
 					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
-					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter, payloadCfg)
+					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter, payloadCfg, fastVerify)
 				} else {
-					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter, payloadCfg)
+					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter, payloadCfg, fastVerify)
 				}
 
 				verifyResults = append(verifyResults, results...)
