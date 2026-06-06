@@ -513,6 +513,12 @@ func detectFilter(line string) FilterInfo {
 		{"replace(/on\\w+", "regex strip events"},
 		{"replace(/javascript:", "regex strip js protocol"},
 		{".replace(.*<.*>)", "regex strip tags"},
+		{"replace(/[()]", "regex strip parentheses"},
+		{"replace(/\\(", "regex strip parentheses"},
+		{"replace(/\\)", "regex strip parentheses"},
+		{"replace(/['\"]", "regex strip quotes"},
+		{"replace(/\\s", "regex strip whitespace"},
+		{"replace(/\\w", "regex strip word chars"},
 	}
 	for _, r := range regexFilters {
 		if strings.Contains(lower, r.pattern) {
