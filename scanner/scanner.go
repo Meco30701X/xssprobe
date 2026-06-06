@@ -61,6 +61,10 @@ func (t *TaintTracker) TrackLine(line string) {
 	// Check if RHS contains a tainted variable
 	// e.g. var y = x; where x is tainted
 	for taintedVar, sourceName := range t.taintedVars {
+		// Skip self-references (e.g., putDiv = putDiv.replace(...))
+		if taintedVar == varName {
+			continue
+		}
 		if strings.Contains(value, taintedVar) {
 			t.taintedVars[varName] = sourceName + "(via "+taintedVar+")"
 			// Propagate filter status if the source was filtered
@@ -446,7 +450,7 @@ func detectFilter(line string) FilterInfo {
 		{"replace(/on\\w+", "regex strip events"},
 		{"replace(/javascript:", "regex strip js protocol"},
 		{".replace(.*<.*>)", "regex strip tags"},
-		{"replace(/[()]", "regex strip parentheses"},
+		{"replace(/[()`]", "regex strip parentheses and backticks"},
 		{"replace(/\\(", "regex strip parentheses"},
 		{"replace(/\\)", "regex strip parentheses"},
 		{"replace(/['\"]", "regex strip quotes"},
