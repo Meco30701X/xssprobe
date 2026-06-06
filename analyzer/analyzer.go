@@ -135,13 +135,13 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 
 	// For hash-based sources
 	if strings.Contains(source, "hash") {
-		return verifier.TestHashOnly(targetURL, auth, waf)
+		return verifier.TestHashOnly(targetURL, auth, waf, nil)
 	}
 
 	// For search/parameter-based sources
 	if strings.Contains(source, "search") || strings.Contains(source, "param") ||
 		strings.Contains(source, "query") {
-		return verifier.TestSearchOnly(targetURL, auth, waf)
+		return verifier.TestSearchOnly(targetURL, auth, waf, nil)
 	}
 
 	// For postMessage sources
@@ -151,7 +151,7 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 	}
 
 	// Default: test both hash and search params
-	return verifier.TestHashOnly(targetURL, auth, waf)
+	return verifier.TestHashOnly(targetURL, auth, waf, nil)
 }
 
 // filterByConfidence filters findings by confidence level

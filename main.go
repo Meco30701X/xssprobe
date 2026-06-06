@@ -265,6 +265,12 @@ func main() {
 		fmt.Printf("[*] Loaded 1 custom payload from command line\n")
 		fmt.Println("[!] WARNING: Custom payloads are NOT reviewed for safety.")
 		fmt.Println("    You are fully responsible for their impact on the target system.")
+		// Check for dangerous patterns in custom payload
+		if containsExfilPattern(*customPayload) {
+			fmt.Println("[!] ⚠️  DANGER: Custom payload contains data exfiltration pattern!")
+			fmt.Println("    This payload may send sensitive data to external servers.")
+			fmt.Println("    Ensure you have explicit authorization to use this.")
+		}
 	}
 	if *payloadFile != "" {
 		filePayloads, err := payloads.LoadPayloadsFromFile(*payloadFile)
@@ -369,6 +375,29 @@ func printUsage() {
 	fmt.Println("  -yes          Skip legal confirmation (for CI/CD)")
 	fmt.Println()
 	fmt.Printf("Payload library: %d payloads available\n", payloads.Count())
+}
+
+// containsExfilPattern checks if a payload contains data exfiltration patterns
+func containsExfilPattern(payload string) bool {
+	exfilPatterns := []string{
+		"evil.com",
+		"YOUR_DOMAIN.example",
+		"fetch(",
+		"XMLHttpRequest",
+		"sendBeacon",
+		"WebSocket",
+		"document.cookie",
+		"document.domain",
+		"window.location",
+		"location.href",
+	}
+	lower := strings.ToLower(payload)
+	for _, pattern := range exfilPatterns {
+		if strings.Contains(lower, strings.ToLower(pattern)) {
+			return true
+		}
+	}
+	return false
 }
 
 func readURLFile(filename string) ([]string, error) {
@@ -576,12 +605,12 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	if doVerify {
 		fmt.Println("\n[*] Reflected DOM XSS verification...")
 
-		// Merge custom payloads if provided
+		// Build payload config (thread-safe, no globals)
 		effectiveWAF := wafType
+		var payloadCfg *verifier.PayloadConfig
 		if len(customPayloads) > 0 && mergePayloads {
 			fmt.Printf("[*] Using %d custom payloads\n", len(customPayloads))
-			// Store custom payloads for use in verification
-			verifier.SetCustomPayloads(customPayloads, customFirst)
+			payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
 		}
 
 		paramNames := miner.ParamNames(discoveredParams)
@@ -607,32 +636,30 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 
 			if len(paramContexts) > 0 {
 				fmt.Printf("\n[*] Testing %d reflected parameters with context-aware payloads...\n", len(paramContexts))
-				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter)
+				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			} else {
 				fmt.Println("[*] No parameters reflected - testing with default payloads")
-				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter)
+				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 		} else {
 			// Fallback to default params
-			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter)
+			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		}
-
-		// Clear custom payloads after verification
-		verifier.ClearCustomPayloads()
 	}
 
 	// Stored DOM XSS
 	if doStored {
 		fmt.Println("\n[*] Stored DOM XSS detection...")
-		results, _ := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode, cc.Limiter)
+		results, submitted := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode, cc.Limiter)
 		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
+		verifier.PrintCleanupReminder(submitted, safetyMode)
 	}
 
 	// Save results
@@ -860,9 +887,10 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 
 			// Dynamic verification
 			if doVerify {
-				// Set custom payloads for this URL
+				// Build payload config for this URL (thread-safe)
+				var payloadCfg *verifier.PayloadConfig
 				if len(customPayloads) > 0 && mergePayloads {
-					verifier.SetCustomPayloads(customPayloads, customFirst)
+					payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
 				}
 
 				// Parameter discovery for this URL
@@ -884,13 +912,11 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
 					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
-					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter)
+					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter, payloadCfg)
 				} else {
-					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter)
+					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter, payloadCfg)
 				}
 
-				// Clear custom payloads after verification
-				verifier.ClearCustomPayloads()
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {
@@ -901,13 +927,14 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 
 			// Stored XSS
 			if doStored {
-				results, _ := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode, cc.Limiter)
+				results, submitted := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode, cc.Limiter)
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {
 						fmt.Printf("  [!] Stored XSS: %s\n", r.Detail)
 					}
 				}
+				verifier.PrintCleanupReminder(submitted, safetyMode)
 			}
 
 			mu.Lock()

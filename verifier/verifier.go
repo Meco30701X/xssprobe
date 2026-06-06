@@ -40,42 +40,29 @@ func SetDisableCORS(disable bool) {
 	disableCORSFlag = disable
 }
 
-// Custom payload support
-var (
-	customPayloads    []payloads.Payload
-	customPayloadsFirst bool
-	hasCustomPayloads bool
-)
-
-// SetCustomPayloads sets custom payloads for testing
-func SetCustomPayloads(p []payloads.Payload, first bool) {
-	customPayloads = p
-	customPayloadsFirst = first
-	hasCustomPayloads = true
+// PayloadConfig holds custom payload configuration (thread-safe)
+type PayloadConfig struct {
+	CustomPayloads []payloads.Payload
+	CustomFirst    bool
 }
 
-// ClearCustomPayloads clears custom payloads
-func ClearCustomPayloads() {
-	customPayloads = nil
-	hasCustomPayloads = false
-}
-
-// getCustomPayloadValues returns custom payload values
-func getCustomPayloadValues() []string {
-	var values []string
-	for _, p := range customPayloads {
-		values = append(values, p.Value)
+// NewPayloadConfig creates a new PayloadConfig
+func NewPayloadConfig(custom []payloads.Payload, first bool) *PayloadConfig {
+	return &PayloadConfig{
+		CustomPayloads: custom,
+		CustomFirst:    first,
 	}
-	return values
 }
 
 // getTestPayloads returns the payload strings to test, optionally filtered by WAF
-func getTestPayloads(waf string) []string {
+func getTestPayloads(waf string, config *PayloadConfig) []string {
 	var result []string
 
 	// Add custom payloads first if configured
-	if hasCustomPayloads && customPayloadsFirst {
-		result = append(result, getCustomPayloadValues()...)
+	if config != nil && len(config.CustomPayloads) > 0 && config.CustomFirst {
+		for _, p := range config.CustomPayloads {
+			result = append(result, p.Value)
+		}
 	}
 
 	// Always include canary payloads
@@ -102,15 +89,17 @@ func getTestPayloads(waf string) []string {
 	}
 
 	// Add custom payloads last if not first
-	if hasCustomPayloads && !customPayloadsFirst {
-		result = append(result, getCustomPayloadValues()...)
+	if config != nil && len(config.CustomPayloads) > 0 && !config.CustomFirst {
+		for _, p := range config.CustomPayloads {
+			result = append(result, p.Value)
+		}
 	}
 
 	return result
 }
 
 // getTestPayloadsByContext returns payloads selected by injection context and WAF
-func getTestPayloadsByContext(contextType string, waf string) []string {
+func getTestPayloadsByContext(contextType string, waf string, config *PayloadConfig) []string {
 	var result []string
 
 	// Always include canary payloads
@@ -219,16 +208,16 @@ func extractDomain(ctx context.Context) string {
 }
 
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
 	// Default parameters for backward compatibility
 	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
-	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter)
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config)
 }
 
 // VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
-func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter) []VerifyResult {
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
 	var results []VerifyResult
-	testPayloads := getTestPayloads(waf)
+	testPayloads := getTestPayloads(waf, config)
 
 	if len(params) == 0 {
 		params = []string{"q", "search", "id", "page", "input", "name", "s"}
@@ -250,11 +239,11 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 }
 
 // VerifyURLWithContext tests a URL with context-aware payload selection
-func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter) []VerifyResult {
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig) []VerifyResult {
 	var results []VerifyResult
 
 	// Test hash fragment with default payloads
-	testPayloads := getTestPayloads(waf)
+	testPayloads := getTestPayloads(waf, config)
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
 		r := testHash(targetURL, payload, auth, limiter)
 		results = append(results, r)
@@ -263,7 +252,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 	// Test each parameter with context-aware payloads
 	for param, ctxType := range paramContexts {
 		// Get context-specific payloads
-		contextPayloads := getTestPayloadsByContext(ctxType, waf)
+		contextPayloads := getTestPayloadsByContext(ctxType, waf, config)
 		if len(contextPayloads) == 0 {
 			contextPayloads = testPayloads[:min(10, len(testPayloads))]
 		}
@@ -557,6 +546,34 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode 
 	return results, submitted
 }
 
+// PrintCleanupReminder reminds user to clean up test data after stored XSS testing
+func PrintCleanupReminder(submitted bool, safetyMode *safety.SafetyMode) {
+	if !submitted || safetyMode.DryRun {
+		return
+	}
+
+	fmt.Println()
+	fmt.Println("╔═══════════════════════════════════════════════════════════════╗")
+	fmt.Println("║                    🧹 CLEANUP REMINDER                      ║")
+	fmt.Println("╠═══════════════════════════════════════════════════════════════╣")
+	fmt.Println("║  Test data was submitted to the target server.               ║")
+	fmt.Println("║  Please clean up the test data to avoid leaving traces.      ║")
+	fmt.Println("║                                                              ║")
+	fmt.Println("║  Recommended actions:                                        ║")
+	fmt.Println("║    1. Delete any test posts/comments created                 ║")
+	fmt.Println("║    2. Remove test entries from the database                  ║")
+	fmt.Println("║    3. Clear any cached test data                             ║")
+	fmt.Println("║                                                              ║")
+
+	if safetyMode.Safe {
+		fmt.Println("║  Test payloads used: Harmless canary strings                 ║")
+		fmt.Println("║    (e.g., XSSPROBE_TEST_<timestamp>)                         ║")
+	}
+
+	fmt.Println("╚═══════════════════════════════════════════════════════════════╝")
+	fmt.Println()
+}
+
 type inputInfo struct {
 	Selector string
 	Tag      string
@@ -691,8 +708,8 @@ func testStoredInput(ctx context.Context, baseURL string, input inputInfo, paylo
 }
 
 // TestHashOnly tests only hash-based XSS (for analyzer)
-func TestHashOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
-	payloads := getTestPayloads(waf)
+func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
+	payloads := getTestPayloads(waf, config)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "hash", Detail: "no payloads available"}
 	}
@@ -703,8 +720,8 @@ func TestHashOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
 }
 
 // TestSearchOnly tests only search parameter XSS (for analyzer)
-func TestSearchOnly(targetURL string, auth *AuthConfig, waf string) VerifyResult {
-	payloads := getTestPayloads(waf)
+func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
+	payloads := getTestPayloads(waf, config)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "search", Detail: "no payloads available"}
 	}

