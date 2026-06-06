@@ -205,6 +205,12 @@ cat urls.txt | ./xssprobe -verify
 ```bash
 # JSON 导出
 ./xssprobe -u https://target.com -o result.json
+
+# HTML 报告（人工判断友好）
+./xssprobe -u https://target.com -html report.html
+
+# 同时输出 JSON 和 HTML
+./xssprobe -u https://target.com -verify -o result.json -html report.html
 ```
 
 ## CLI 参数一览
@@ -215,6 +221,7 @@ cat urls.txt | ./xssprobe -verify
 | `-l` | URL 文件路径 | — |
 | `-f` | 本地 JS 文件 | — |
 | `-o` | JSON 输出路径 | — |
+| `-html` | HTML 报告输出路径 | — |
 | `-verify` | 动态验证（`-verify` 高成功率，`-verify all` 全量，`-verify N` 找到 N 个就停） | false |
 | `-stored` | 启用存储型 XSS 检测 | false |
 | `-spa` | SPA 渲染模式 | false |
