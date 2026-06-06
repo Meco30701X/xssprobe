@@ -25,7 +25,7 @@
 | **自动爬虫** | 站内页面自动发现，支持深度和数量限制 |
 | **参数自动发现** | 从 HTML 表单、URL、JavaScript 中自动提取参数 |
 | **WAF 自动识别** | 指纹识别 7 种主流 WAF（Cloudflare/AWS/ModSecurity/Akamai/Imperva/Sucuri/F5） |
-| **Payload 库** | 137 个内置 payload，支持 WAF 绕过编码变体 |
+| **Payload 库** | 193 个内置 payload，覆盖 9 类绕过技术（WAF 绕过、HPP、JSONP、DOM Clobbering、mXSS、框架特定、数据外带、Polyglot） |
 | **自定义 Payload** | 支持单个 payload 字符串或文件批量加载 |
 
 ### 安全合规
@@ -93,8 +93,8 @@ go build -o xssprobe .
 # 反射型动态验证（推荐）
 ./xssprobe -u https://target.com -verify
 
-# 存储型 XSS 检测
-./xssprobe -u https://target.com -stored -dry-run
+# 存储型 XSS 检测（默认 dry-run，不提交数据）
+./xssprobe -u https://target.com -stored
 
 # SPA 渲染模式
 ./xssprobe -u https://target.com -spa
@@ -225,14 +225,15 @@ cat urls.txt | ./xssprobe -verify
 | `-payload-first` | 优先测试自定义 payload | true |
 | `-scope` | 域名范围锁定 | — |
 | `-rate` | 每秒最大请求数 | 2 |
-| `-audit` | 审计日志路径 | — |
+| `-audit` | 审计日志路径 | 自动启用 |
 | `-respect-robots` | 遵守 robots.txt | true |
 | `-threads` | 批量扫描并发数 | 5 |
 | `-wait` | SPA 渲染等待时间（秒） | 5 |
 | `-dry-run` | 干运行模式 | false |
 | `-safe` | 仅使用安全 payload | false |
 | `-confirm` | 每次提交前确认 | false |
-| `-yes` | 跳过法律确认 | false |
+| `-yes` | 跳过法律确认（需配合 `-scope`） | false |
+| `-disable-cors` | 禁用浏览器同源策略 | false |
 
 ## 检测原理
 
