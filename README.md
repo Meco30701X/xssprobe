@@ -4,6 +4,8 @@
 
 > **Disclaimer**: 本工具仅供合法安全测试和授权渗透测试使用。使用者需遵守当地法律法规，未经授权对目标系统进行扫描属于违法行为。
 
+> **AI Project**: 本项目由人类开发者与 AI 协作完成。AI 参与了代码编写、架构设计、安全审计、文档生成等工作。
+
 ## 功能特性
 
 ### 核心检测能力
@@ -24,8 +26,8 @@
 | **SPA 渲染** | chromedp 渲染 Vue/React/Angular 等 SPA 应用 |
 | **自动爬虫** | 站内页面自动发现，支持深度和数量限制 |
 | **参数自动发现** | 从 HTML 表单、URL、JavaScript 中自动提取参数 |
-| **WAF 自动识别** | 指纹识别 7 种主流 WAF（Cloudflare/AWS/ModSecurity/Akamai/Imperva/Sucuri/F5） |
-| **Payload 库** | 193 个内置 payload，覆盖 9 类绕过技术（WAF 绕过、HPP、JSONP、DOM Clobbering、mXSS、框架特定、数据外带、Polyglot） |
+| **WAF 自动识别** | 指纹识别 40+ 种 WAF（Cloudflare/AWS/长亭雷池/安恒/深信服/腾讯云/阿里云等） |
+| **Payload 库** | 300+ 个内置 payload，覆盖 16 类绕过技术（WAF 绕过、编码绕过、现代 JS 特性、HTMX 等） |
 | **自定义 Payload** | 支持单个 payload 字符串或文件批量加载 |
 
 ### 安全合规
@@ -348,6 +350,32 @@ go test ./waf/...
 
 本项目仅供合法安全研究和授权测试使用。使用者需遵守当地法律法规。
 
+## 关于本项目
+
+本项目是一个 **AI 辅助开发** 的安全工具，由人类开发者与 AI 协作完成：
+
+- **人类开发者** — 需求定义、架构决策、安全审查、测试验证
+- **AI 助手** — 代码编写、文档生成、Bug 修复、功能优化
+
+### AI 参与的工作
+
+| 领域 | AI 贡献 |
+|------|---------|
+| 代码编写 | 核心功能实现、WAF 指纹库、Payload 库 |
+| 架构设计 | 模块划分、接口设计、数据流优化 |
+| 安全审计 | 合规检查、安全机制设计、漏洞修复 |
+| 文档生成 | README、注释、使用示例 |
+| 测试优化 | 单元测试框架、测试用例设计 |
+
+### 技术栈
+
+- **语言**: Go 1.26
+- **浏览器自动化**: chromedp (Chrome DevTools Protocol)
+- **构建**: GitHub Actions CI/CD
+- **分发**: 多平台预编译二进制
+
 ## Author
 
 **Meco30701X**
+
+GitHub: [@Meco30701X](https://github.com/Meco30701X)
