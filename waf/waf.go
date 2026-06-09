@@ -375,6 +375,134 @@ func getWAFSignatures() []WAFSignature {
 			},
 			StatusCodes: []int{403},
 		},
+		{
+			Name: "safeline",
+			Headers: map[string][]string{
+				"server": {"safeline", "changting"},
+				"x-safeline": {""},
+			},
+			BodyMatch: []string{
+				"safeline",
+				"长亭",
+				"雷池",
+				"blocked by safeline",
+				"chaitin",
+			},
+			StatusCodes: []int{403, 503},
+		},
+		{
+			Name: "dbappsecurity",
+			Headers: map[string][]string{
+				"server": {"dbappsecurity", "anhen"},
+				"x-dbappsecurity": {""},
+			},
+			BodyMatch: []string{
+				"dbappsecurity",
+				"安恒",
+				"blocked by dbappsecurity",
+				"明御",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "sangfor",
+			Headers: map[string][]string{
+				"server": {"sangfor"},
+				"x-sangfor": {""},
+			},
+			BodyMatch: []string{
+				"sangfor",
+				"深信服",
+				"blocked by sangfor",
+				"afcloud",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "topsec",
+			Headers: map[string][]string{
+				"server": {"topsec"},
+				"x-topsec": {""},
+			},
+			BodyMatch: []string{
+				"topsec",
+				"天融信",
+				"blocked by topsec",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "venustech",
+			Headers: map[string][]string{
+				"server": {"venustech"},
+				"x-venustech": {""},
+			},
+			BodyMatch: []string{
+				"venustech",
+				"启明星辰",
+				"blocked by venustech",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "bluedon",
+			Headers: map[string][]string{
+				"server": {"bluedon"},
+				"x-bluedon": {""},
+			},
+			BodyMatch: []string{
+				"bluedon",
+				"蓝盾",
+				"blocked by bluedon",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "huawei",
+			Headers: map[string][]string{
+				"server": {"huawei", "elb"},
+				"x-huawei": {""},
+				"x-hws-ip": {""},
+			},
+			BodyMatch: []string{
+				"huawei",
+				"华为",
+				"blocked by huawei",
+				"hwcloud",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "tencent",
+			Headers: map[string][]string{
+				"server": {"tencent", "tencent-cdn"},
+				"x-tencent": {""},
+				"x-nws-uuid-verify": {""},
+			},
+			BodyMatch: []string{
+				"tencent",
+				"腾讯",
+				"blocked by tencent",
+				"腾讯云",
+			},
+			StatusCodes: []int{403},
+		},
+		{
+			Name: "alibaba",
+			Headers: map[string][]string{
+				"server": {"alibaba", "aliyun"},
+				"x-alibaba": {""},
+				"eagleid": {""},
+			},
+			BodyMatch: []string{
+				"alibaba",
+				"阿里",
+				"blocked by alibaba",
+				"阿里云",
+				"aliyun",
+			},
+			StatusCodes: []int{403},
+		},
 
 		// === Other WAFs ===
 		{
@@ -608,6 +736,8 @@ func GetRecommendedWAF(detected string) string {
 		"denyall", "wallarm", "reblaze", "aion",
 		"stackpath", "fastly", "edgecast",
 		"yunjiasu", "360", "anquanbao", "safedog", "yundun", "chuangyu", "nsfocus", "wangsu",
+		"safeline", "dbappsecurity", "sangfor", "topsec", "venustech", "bluedon",
+		"huawei", "tencent", "alibaba",
 		"wordfence", "bulletproof", "cerber", "malcare", "securi":
 		return "generic" // Use generic bypass for these
 	default:
