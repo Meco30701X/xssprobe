@@ -26,6 +26,7 @@ vendor/
 *_audit.jsonl
 *_audit.json
 *.log
+*.html
 
 # OS
 .DS_Store
