@@ -23,7 +23,7 @@ import (
 	wafpkg "github.com/Meco30701X/xssprobe/waf"
 )
 
-const version = "1.2.0"
+const version = "1.0.0"
 
 type headerFlags map[string]string
 
