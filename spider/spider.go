@@ -17,6 +17,7 @@ import (
 type Config struct {
 	MaxPages    int           // Max pages to crawl
 	MaxDepth    int           // Max link depth
+	Concurrency int           // Max concurrent requests
 	Timeout     time.Duration // Per-page timeout
 	SameDomain  bool          // Only crawl same domain
 	Proxy       string        // HTTP proxy URL
@@ -28,10 +29,11 @@ type Config struct {
 // DefaultConfig returns default crawler config
 func DefaultConfig() *Config {
 	return &Config{
-		MaxPages:   50,
-		MaxDepth:   3,
-		Timeout:    15 * time.Second,
-		SameDomain: true,
+		MaxPages:    50,
+		MaxDepth:    3,
+		Concurrency: 5,
+		Timeout:     15 * time.Second,
+		SameDomain:  true,
 	}
 }
 
@@ -67,10 +69,14 @@ func NewCrawler(config *Config) *Crawler {
 	if config == nil {
 		config = DefaultConfig()
 	}
+	concurrency := config.Concurrency
+	if concurrency <= 0 {
+		concurrency = 5
+	}
 	return &Crawler{
 		config:  config,
 		visited: make(map[string]bool),
-		sem:     make(chan struct{}, 5), // max 5 concurrent
+		sem:     make(chan struct{}, concurrency),
 	}
 }
 
