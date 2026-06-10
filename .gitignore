@@ -32,3 +32,4 @@ vendor/
 .DS_Store
 Thumbs.db
 SECURITY_AUDIT_REPORT.md
+release/
