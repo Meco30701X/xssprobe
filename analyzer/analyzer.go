@@ -25,6 +25,8 @@ type AnalysisConfig struct {
 	MaxVerify    int    // Max findings to verify (0 = all)
 	OnlyHigh     bool   // Only verify high severity findings
 	SkipFiltered bool   // Skip findings with detected filtering
+	DisableCORS  bool   // Disable browser same-origin policy
+	Proxy        string // HTTP proxy URL
 }
 
 // DefaultAnalysisConfig returns default analysis configuration
@@ -106,7 +108,7 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 				results[i].Finding.Source, results[i].Finding.Sink,
 				results[i].Finding.Line)
 
-			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF)
+			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF, config.DisableCORS, config.Proxy)
 			results[i].Verified = true
 			results[i].VerifyResult = &verifyResult
 			results[i].Confirmed = verifyResult.Triggered
@@ -129,29 +131,29 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 }
 
 // verifyFinding performs dynamic verification for a specific finding
-func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string) verifier.VerifyResult {
+func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string, disableCORS bool, proxy string) verifier.VerifyResult {
 	// Determine which verification method to use based on the source
 	source := strings.ToLower(finding.Source)
 
 	// For hash-based sources
 	if strings.Contains(source, "hash") {
-		return verifier.TestHashOnly(targetURL, auth, waf, nil)
+		return verifier.TestHashOnly(targetURL, auth, waf, nil, disableCORS, proxy)
 	}
 
 	// For search/parameter-based sources
 	if strings.Contains(source, "search") || strings.Contains(source, "param") ||
 		strings.Contains(source, "query") {
-		return verifier.TestSearchOnly(targetURL, auth, waf, nil)
+		return verifier.TestSearchOnly(targetURL, auth, waf, nil, disableCORS, proxy)
 	}
 
 	// For postMessage sources
 	if strings.Contains(source, "message") || strings.Contains(source, "postmessage") {
 		// postMessage requires special handling
-		return verifier.VerifyPostMessage(targetURL, auth, waf, nil)
+		return verifier.VerifyPostMessage(targetURL, auth, waf, nil, disableCORS, proxy)
 	}
 
 	// Default: test both hash and search params
-	return verifier.TestHashOnly(targetURL, auth, waf, nil)
+	return verifier.TestHashOnly(targetURL, auth, waf, nil, disableCORS, proxy)
 }
 
 // filterByConfidence filters findings by confidence level
@@ -277,9 +279,3 @@ func truncateCode(code string, maxLen int) string {
 	return code[:maxLen-3] + "..."
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
