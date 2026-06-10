@@ -23,7 +23,7 @@ import (
 	wafpkg "github.com/Meco30701X/xssprobe/waf"
 )
 
-const version = "1.0.0"
+const version = "1.0.1"
 
 type headerFlags map[string]string
 
@@ -237,16 +237,16 @@ func main() {
 
 	// Set browser CORS policy
 	if *disableCORS {
-		fmt.Println("[!] WARNING: Browser same-origin policy disabled. Use with caution.")
+		fmt.Println("[!] WARNING: Browser same-origin policy disabled.")
+		fmt.Println("    This bypasses browser security policies and may expose the tool to security risks.")
+		fmt.Println("    Only use this in isolated testing environments.")
 	}
-	verifier.SetDisableCORS(*disableCORS)
 	fetcher.SetDisableCORS(*disableCORS)
 
 	// Set proxy
 	if *proxy != "" {
 		fmt.Printf("[*] Proxy: %s\n", *proxy)
 		fetcher.SetProxy(*proxy)
-		verifier.SetProxy(*proxy)
 	}
 
 	fmt.Printf("[*] Compliance: scope=%s, rate=%d/s, robots=%v\n",
@@ -262,6 +262,7 @@ func main() {
 		crawlConfig := spider.DefaultConfig()
 		crawlConfig.MaxPages = *maxPages
 		crawlConfig.MaxDepth = *maxDepth
+		crawlConfig.Concurrency = *threads
 		crawlConfig.Compliance = complianceCtx
 		crawlConfig.Proxy = *proxy
 		if auth != nil {
@@ -362,14 +363,14 @@ func main() {
 	// Single URL or batch
 	if len(urls) == 1 {
 		if *analyze {
-			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx)
+			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx, *disableCORS, *proxy)
 		} else {
 			scanURL(urls[0], auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, safetyMode, complianceCtx,
-				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
+				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *disableCORS, *proxy)
 		}
 	} else if len(urls) > 1 {
 		scanBatch(urls, auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, *threads, safetyMode, complianceCtx,
-			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst)
+			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *disableCORS, *proxy)
 	}
 }
 
@@ -507,7 +508,7 @@ func scanLocalFile(filename, output string) {
 }
 
 func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
+	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool, disableCORS bool, proxy string) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
 	var pageHTML string // store HTML for parameter mining
@@ -708,7 +709,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 
 			if len(paramContexts) > 0 {
 				fmt.Printf("\n[*] Testing %d reflected parameters with context-aware payloads...\n", len(paramContexts))
-				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+				results := verifier.VerifyURLWithContext(targetURL, auth, effectiveWAF, paramContexts, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
@@ -716,20 +717,20 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			// Always test DOM XSS parameters with chromedp (they're processed by JS, not reflected in HTML)
 			if len(domXSSParams) > 0 {
 				fmt.Printf("\n[*] Testing %d DOM XSS parameters (not reflected in HTML)...\n", len(domXSSParams))
-				results := verifier.VerifyURLWithParams(targetURL, auth, effectiveWAF, domXSSParams, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+				results := verifier.VerifyURLWithParams(targetURL, auth, effectiveWAF, domXSSParams, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 
 			if len(paramContexts) == 0 && len(domXSSParams) == 0 {
 				fmt.Println("[*] No parameters found - testing with default payloads")
-				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+				results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 				allVerifyResults = append(allVerifyResults, results...)
 				verifier.PrintResults(results)
 			}
 		} else {
 			// Fallback to default params
-			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+			results := verifier.VerifyURL(targetURL, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 			allVerifyResults = append(allVerifyResults, results...)
 			verifier.PrintResults(results)
 		}
@@ -738,7 +739,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	// Stored DOM XSS
 	if doStored {
 		fmt.Println("\n[*] Stored DOM XSS detection...")
-		results, submitted := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode, cc.Limiter)
+		results, submitted := verifier.VerifyStoredXSS(targetURL, auth, wafType, safetyMode, cc.Limiter, disableCORS, proxy)
 		allVerifyResults = append(allVerifyResults, results...)
 		verifier.PrintResults(results)
 		verifier.PrintCleanupReminder(submitted, safetyMode)
@@ -764,7 +765,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	}
 }
 
-func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, maxVerify int, skipFiltered bool, cc *compliance.ComplianceContext) {
+func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, maxVerify int, skipFiltered bool, cc *compliance.ComplianceContext, disableCORS bool, proxy string) {
 	// Compliance check
 	if err := cc.CheckURL(targetURL, "analyze"); err != nil {
 		fmt.Printf("[!] Compliance blocked: %v\n", err)
@@ -846,6 +847,8 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 		WAF:          waf,
 		MaxVerify:    maxVerify,
 		SkipFiltered: skipFiltered,
+		DisableCORS:  disableCORS,
+		Proxy:        proxy,
 	}
 
 	results := analyzer.AnalyzeFindings(targetURL, allFindings, auth, config)
@@ -859,7 +862,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 }
 
 func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
-	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool) {
+	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool, disableCORS bool, proxy string) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
 	var mu sync.Mutex
@@ -1003,9 +1006,9 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
 					fmt.Printf("  [*] Testing %d parameters\n", len(urlParams))
-					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+					results = verifier.VerifyURLWithParams(u, auth, effectiveWAF, urlParams, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 				} else {
-					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll)
+					results = verifier.VerifyURL(u, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
 				}
 
 				verifyResults = append(verifyResults, results...)
@@ -1018,7 +1021,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 
 			// Stored XSS
 			if doStored {
-				results, submitted := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode, cc.Limiter)
+				results, submitted := verifier.VerifyStoredXSS(u, auth, effectiveWAF, safetyMode, cc.Limiter, disableCORS, proxy)
 				verifyResults = append(verifyResults, results...)
 				for _, r := range results {
 					if r.Triggered {
