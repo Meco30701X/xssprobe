@@ -98,6 +98,7 @@ func (t *TaintTracker) TrackLine(line string) {
 
 	// Check if RHS contains a tainted variable (simple containment)
 	// e.g. var y = x; where x is tainted
+	// BUT: if the assignment still references a tainted variable, preserve taint
 	for taintedVar, sourceName := range t.taintedVars {
 		// Skip self-references (e.g., putDiv = putDiv.replace(...))
 		if taintedVar == varName {
@@ -114,6 +115,15 @@ func (t *TaintTracker) TrackLine(line string) {
 	}
 
 	// Variable reassigned to something safe — remove taint
+	// Only remove if the new value doesn't reference any tainted variable
+	for taintedVar := range t.taintedVars {
+		if taintedVar == varName {
+			continue
+		}
+		if strings.Contains(value, taintedVar) {
+			return // Preserve taint - still references tainted variable
+		}
+	}
 	delete(t.taintedVars, varName)
 	delete(t.filteredVars, varName)
 }
@@ -320,7 +330,7 @@ func getSources() []pattern {
 		{"URL helper functions", regexp.MustCompile(`getUrl\s*\(|getParameter\s*\(|getQueryVariable\s*\(|getQuery\s*\(|param\s*\(|qs\s*\(|getQueryParam\s*\(`)},
 
 		// === DOM Element Sources ===
-		{"element.value", regexp.MustCompile(`\.value\b`)},
+		{"input.value", regexp.MustCompile(`(?:input|textarea|select)\S*\.value`)},
 		{"element.textContent", regexp.MustCompile(`\.textContent\b`)},
 		{"element.innerText", regexp.MustCompile(`\.innerText\b`)},
 		{"element.innerHTML", regexp.MustCompile(`\.innerHTML\b`)},
@@ -373,11 +383,11 @@ func getSources() []pattern {
 func getSinks() []pattern {
 	return []pattern{
 		// === Code Execution Sinks ===
-		{"eval", regexp.MustCompile(`eval\s*\(`)},
+		{"eval", regexp.MustCompile(`(^|[^a-zA-Z0-9_])eval\s*\(`)},
 		{"setTimeout", regexp.MustCompile(`setTimeout\s*\(`)},
 		{"setInterval", regexp.MustCompile(`setInterval\s*\(`)},
 		{"Function", regexp.MustCompile(`new\s+Function\s*\(|Function\s*\(`)},
-		{"script.src", regexp.MustCompile(`\.src\s*=`)},
+		{"script.src", regexp.MustCompile(`(?:script|iframe|embed|object)\.src\s*=`)},
 		{"script.text", regexp.MustCompile(`\.text\s*=|\.textContent\s*=|\.innerText\s*=`)},
 
 		// === DOM Manipulation Sinks ===
@@ -403,17 +413,8 @@ func getSinks() []pattern {
 		{"location.replace", regexp.MustCompile(`location\.replace\s*\(`)},
 		{"meta.refresh", regexp.MustCompile(`http-equiv.*refresh|content.*url=`)},
 
-		// === Document/Element Creation Sinks ===
-		{"document.createElement", regexp.MustCompile(`createElement\s*\(`)},
-		{"document.createElementNS", regexp.MustCompile(`createElementNS\s*\(`)},
-		{"document.createDocumentFragment", regexp.MustCompile(`createDocumentFragment\s*\(`)},
-
 		// === jQuery Sinks ===
 		{"jQuery.html", regexp.MustCompile(`\.html\s*\(`)},
-		{"jQuery.append", regexp.MustCompile(`\.append\s*\(`)},
-		{"jQuery.prepend", regexp.MustCompile(`\.prepend\s*\(`)},
-		{"jQuery.after", regexp.MustCompile(`\.after\s*\(`)},
-		{"jQuery.before", regexp.MustCompile(`\.before\s*\(`)},
 		{"jQuery.replaceWith", regexp.MustCompile(`\.replaceWith\s*\(`)},
 		{"jQuery.wrap", regexp.MustCompile(`\.wrap\s*\(`)},
 		{"jQuery.htmlPrefilter", regexp.MustCompile(`\.htmlPrefilter\s*\(`)},
