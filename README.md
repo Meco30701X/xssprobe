@@ -104,8 +104,11 @@ go build -o xssprobe .
 # 测试到 3 个确认就停
 ./xssprobe -u https://target.com -verify 3
 
-# 存储型 XSS 检测（默认 dry-run，不提交数据）
+# 存储型 XSS 检测（默认 dry-run + safe + confirm，不提交数据）
 ./xssprobe -u https://target.com -stored
+
+# 存储型 XSS 检测（实际提交安全 payload，需确认）
+./xssprobe -u https://target.com -stored -dry-run=false -safe -confirm
 
 # SPA 渲染模式
 ./xssprobe -u https://target.com -spa
@@ -215,6 +218,13 @@ cat urls.txt | ./xssprobe -verify
 ./xssprobe -u https://target.com -verify -o result.json -html report.html
 ```
 
+### ⚠️ 安全警告
+
+**`-disable-cors` 参数**：禁用浏览器同源策略，会绕过浏览器的安全保护机制。此参数仅应在隔离的测试环境中使用，不建议在生产环境或公共网络中使用。使用此参数可能导致：
+- 绕过 Content Security Policy (CSP)
+- 允许跨域请求
+- 暴露测试环境的安全风险
+
 ## CLI 参数一览
 
 | 参数 | 说明 | 默认值 |
@@ -250,11 +260,11 @@ cat urls.txt | ./xssprobe -verify
 | `-respect-robots` | 遵守 robots.txt | true |
 | `-threads` | 批量扫描并发数 | 5 |
 | `-wait` | SPA 渲染等待时间（秒） | 5 |
-| `-dry-run` | 干运行模式 | false |
+| `-dry-run` | 干运行模式（`-stored` 默认启用） | false |
 | `-safe` | 仅使用安全 payload | false |
 | `-confirm` | 每次提交前确认 | false |
 | `-yes` | 跳过法律确认（需配合 `-scope`） | false |
-| `-disable-cors` | 禁用浏览器同源策略 | false |
+| `-disable-cors` | ⚠️ 禁用浏览器同源策略（危险，仅限隔离测试环境） | false |
 | `-proxy` | HTTP 代理 URL（如 `http://127.0.0.1:7890`） | — |
 | `-version` | 显示版本号并退出 | false |
 
