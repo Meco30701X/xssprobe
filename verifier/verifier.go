@@ -33,20 +33,13 @@ type AuthConfig struct {
 // Canary is a unique string used to detect if payload reaches the DOM
 const Canary = "xXssCanary42x"
 
-// disableCORSFlag controls whether browser same-origin policy is disabled
-var disableCORSFlag bool
-
-// SetDisableCORS sets whether to disable browser same-origin policy
-func SetDisableCORS(disable bool) {
-	disableCORSFlag = disable
-}
-
-// proxyURL stores the HTTP proxy URL
-var proxyFlag string
-
-// SetProxy sets the HTTP proxy for chromedp
-func SetProxy(proxy string) {
-	proxyFlag = proxy
+// VerificationConfig holds all verification configuration (thread-safe)
+type VerificationConfig struct {
+	Auth        *AuthConfig
+	DisableCORS bool
+	Proxy       string
+	WAF         string
+	Payload     *PayloadConfig
 }
 
 // PayloadConfig holds custom payload configuration (thread-safe)
@@ -293,7 +286,7 @@ func getTestPayloadsByContext(contextType string, waf string, config *PayloadCon
 }
 
 // newChromeContext creates a chromedp context with optional auth config
-func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (context.Context, context.CancelFunc) {
+func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool, proxy string) (context.Context, context.CancelFunc) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.Flag("headless", true),
 		chromedp.Flag("disable-gpu", true),
@@ -302,8 +295,8 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 	if disableCORS {
 		opts = append(opts, chromedp.Flag("disable-web-security", true))
 	}
-	if proxyFlag != "" {
-		opts = append(opts, chromedp.Flag("proxy-server", proxyFlag))
+	if proxy != "" {
+		opts = append(opts, chromedp.Flag("proxy-server", proxy))
 	}
 
 	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, opts...)
@@ -317,8 +310,9 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 		for _, cookie := range auth.Cookies {
 			parts := strings.SplitN(cookie, "=", 2)
 			if len(parts) == 2 {
+				// Empty domain makes cookie apply to the current page's domain
 				actions = append(actions, network.SetCookie(parts[0], parts[1]).
-					WithDomain(extractDomain(ctx)).
+					WithDomain("").
 					WithPath("/"))
 			}
 		}
@@ -348,17 +342,11 @@ func newChromeContext(ctx context.Context, auth *AuthConfig, disableCORS bool) (
 	return taskCtx, combinedCancel
 }
 
-// extractDomain extracts domain from context (unused, cookie domain auto-applies)
-func extractDomain(ctx context.Context) string {
-	// Empty string makes cookie apply to the current page's domain
-	return ""
-}
-
 // VerifyURL tests a URL for reflected DOM XSS
-func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
+func VerifyURL(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool, disableCORS bool, proxy string) []VerifyResult {
 	// Default parameters for backward compatibility
 	defaultParams := []string{"q", "search", "id", "page", "input", "name", "s"}
-	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config, maxConfirm, testAll)
+	return VerifyURLWithParams(targetURL, auth, waf, defaultParams, limiter, config, maxConfirm, testAll, disableCORS, proxy)
 }
 
 // countConfirmed counts how many results are confirmed
@@ -373,7 +361,7 @@ func countConfirmed(results []VerifyResult) int {
 }
 
 // VerifyURLWithParams tests a URL for reflected DOM XSS with custom parameters
-func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
+func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params []string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool, disableCORS bool, proxy string) []VerifyResult {
 	var results []VerifyResult
 	testPayloads := getTestPayloads(waf, config, testAll)
 
@@ -383,7 +371,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 
 	for _, payload := range testPayloads {
 		// Test hash fragment
-		r := testHash(targetURL, payload, auth, limiter)
+		r := testHash(targetURL, payload, auth, limiter, disableCORS, proxy)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -391,7 +379,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 
 		// Test each parameter
 		for _, param := range params {
-			r = testSearchParam(targetURL, param, payload, auth, limiter)
+			r = testSearchParam(targetURL, param, payload, auth, limiter, disableCORS, proxy)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -403,13 +391,13 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 }
 
 // VerifyURLWithContext tests a URL with context-aware payload selection
-func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool) []VerifyResult {
+func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool, disableCORS bool, proxy string) []VerifyResult {
 	var results []VerifyResult
 
 	// Test hash fragment with default payloads
 	testPayloads := getTestPayloads(waf, config, testAll)
 	for _, payload := range testPayloads[:min(5, len(testPayloads))] {
-		r := testHash(targetURL, payload, auth, limiter)
+		r := testHash(targetURL, payload, auth, limiter, disableCORS, proxy)
 		results = append(results, r)
 		if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 			return results
@@ -427,7 +415,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		fmt.Printf("    Testing '%s' (context: %s) with %d payloads\n", param, ctxType, len(contextPayloads))
 
 		for _, payload := range contextPayloads {
-			r := testSearchParam(targetURL, param, payload, auth, limiter)
+			r := testSearchParam(targetURL, param, payload, auth, limiter, disableCORS, proxy)
 			results = append(results, r)
 			if maxConfirm > 0 && countConfirmed(results) >= maxConfirm {
 				return results
@@ -438,14 +426,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 	return results
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.RateLimiter) VerifyResult {
+func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
 	result := VerifyResult{Payload: payload, Source: "hash"}
 	testURL := baseURL + "#" + url.QueryEscape(payload)
 
@@ -456,7 +437,7 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORS, proxy)
 	defer taskCancel()
 
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
@@ -504,7 +485,7 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 	return result
 }
 
-func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *compliance.RateLimiter) VerifyResult {
+func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
 	result := VerifyResult{Payload: payload, Source: "search:" + param}
 
 	parsedURL, err := url.Parse(baseURL)
@@ -525,7 +506,7 @@ func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORS, proxy)
 	defer taskCancel()
 
 	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
@@ -611,7 +592,7 @@ func isCanaryExecutable(domContent, canary string) bool {
 }
 
 // VerifyStoredXSS tests for stored DOM XSS with safety controls
-func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode *safety.SafetyMode, limiter *compliance.RateLimiter) ([]VerifyResult, bool) {
+func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode *safety.SafetyMode, limiter *compliance.RateLimiter, disableCORS bool, proxy string) ([]VerifyResult, bool) {
 	var results []VerifyResult
 
 	// Safety: print configuration
@@ -624,7 +605,7 @@ func VerifyStoredXSS(targetURL string, auth *AuthConfig, waf string, safetyMode 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORS, proxy)
 	defer taskCancel()
 
 	// Step 1: Navigate and find input fields
@@ -939,7 +920,7 @@ func testStoredInput(ctx context.Context, baseURL string, input inputInfo, paylo
 }
 
 // TestHashOnly tests only hash-based XSS (for analyzer)
-func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
+func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig, disableCORS bool, proxy string) VerifyResult {
 	payloads := getTestPayloads(waf, config, false)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "hash", Detail: "no payloads available"}
@@ -947,11 +928,11 @@ func TestHashOnly(targetURL string, auth *AuthConfig, waf string, config *Payloa
 
 	// Use first canary payload
 	payload := payloads[0]
-	return testHash(targetURL, payload, auth, nil)
+	return testHash(targetURL, payload, auth, nil, disableCORS, proxy)
 }
 
 // TestSearchOnly tests only search parameter XSS (for analyzer)
-func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig) VerifyResult {
+func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *PayloadConfig, disableCORS bool, proxy string) VerifyResult {
 	payloads := getTestPayloads(waf, config, false)
 	if len(payloads) == 0 {
 		return VerifyResult{Source: "search", Detail: "no payloads available"}
@@ -961,7 +942,7 @@ func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *Payl
 	params := []string{"q", "search", "id", "page", "input", "name", "s"}
 
 	for _, param := range params {
-		r := testSearchParam(targetURL, param, payload, auth, nil)
+		r := testSearchParam(targetURL, param, payload, auth, nil, disableCORS, proxy)
 		if r.Triggered {
 			return r
 		}
@@ -971,7 +952,7 @@ func TestSearchOnly(targetURL string, auth *AuthConfig, waf string, config *Payl
 }
 
 // VerifyPostMessage tests postMessage-based XSS
-func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter) VerifyResult {
+func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
 	result := VerifyResult{Source: "postMessage", Payload: Canary}
 
 	if limiter != nil {
@@ -981,7 +962,7 @@ func VerifyPostMessage(targetURL string, auth *AuthConfig, waf string, limiter *
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORSFlag)
+	taskCtx, taskCancel := newChromeContext(ctx, auth, disableCORS, proxy)
 	defer taskCancel()
 
 	// Inject postMessage listener and trigger
