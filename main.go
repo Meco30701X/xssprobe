@@ -555,7 +555,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				cc.LogError(sURL, "script", err.Error())
 				continue
@@ -568,7 +568,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				cc.LogError(sURL, "script", err.Error())
 				continue
@@ -589,7 +589,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	} else {
 		// Standard mode: HTTP fetch
 		fmt.Printf("[*] Fetching %s ...\n", targetURL)
-		html, err := fetcher.FetchPage(targetURL)
+		html, err := fetcher.FetchPage(targetURL, cc.Limiter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return
@@ -613,7 +613,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				cc.LogError(sURL, "script", err.Error())
 				continue
@@ -633,7 +633,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			cookies = auth.Cookies
 			customHeaders = auth.Headers
 		}
-		wafResult := wafpkg.DetectWAF(targetURL, cookies, customHeaders)
+		wafResult := wafpkg.DetectWAF(targetURL, cookies, customHeaders, cc.Limiter)
 		wafpkg.PrintWAFResult(wafResult)
 		if wafResult.Detected {
 			wafType = wafpkg.GetRecommendedWAF(wafResult.Name)
@@ -697,7 +697,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			domXSSParams := []string{} // Parameters that might be DOM XSS (not reflected in HTML)
 
 			for _, param := range paramNames {
-				ctxResult := ctxpkg.DetectContext(targetURL, param, cookies, customHeaders)
+				ctxResult := ctxpkg.DetectContext(targetURL, param, cookies, customHeaders, cc.Limiter)
 				ctxpkg.PrintContextResult(ctxResult, param)
 				if ctxResult.Reflected {
 					paramContexts[param] = string(ctxResult.Context)
@@ -799,7 +799,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				continue
 			}
@@ -809,7 +809,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				continue
 			}
@@ -817,7 +817,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 		}
 	} else {
 		fmt.Printf("[*] Fetching %s ...\n", targetURL)
-		html, err := fetcher.FetchPage(targetURL)
+		html, err := fetcher.FetchPage(targetURL, cc.Limiter)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			return
@@ -833,7 +833,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err := cc.CheckURL(sURL, "script"); err != nil {
 				continue
 			}
-			js, err := fetcher.FetchScript(sURL)
+			js, err := fetcher.FetchScript(sURL, cc.Limiter)
 			if err != nil {
 				continue
 			}
@@ -849,6 +849,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 		SkipFiltered: skipFiltered,
 		DisableCORS:  disableCORS,
 		Proxy:        proxy,
+		Limiter:      cc.Limiter,
 	}
 
 	results := analyzer.AnalyzeFindings(targetURL, allFindings, auth, config)
@@ -873,14 +874,14 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 
-	for _, targetURL := range urls {
+	for i, targetURL := range urls {
 		wg.Add(1)
-		go func(u string) {
+		go func(u string, i int) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
-			fmt.Printf("\n[*] [%d/%d] Scanning %s\n", scanned+1, len(urls), u)
+			fmt.Printf("\n[*] [%d/%d] Scanning %s\n", i+1, len(urls), u)
 
 			// Compliance check for target URL
 			if err := cc.CheckURL(u, "scan"); err != nil {
@@ -915,7 +916,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 					if err := cc.CheckURL(sURL, "script"); err != nil {
 						continue
 					}
-					js, err := fetcher.FetchScript(sURL)
+					js, err := fetcher.FetchScript(sURL, cc.Limiter)
 					if err != nil {
 						cc.LogError(sURL, "script", err.Error())
 						continue
@@ -926,7 +927,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 					if err := cc.CheckURL(sURL, "script"); err != nil {
 						continue
 					}
-					js, err := fetcher.FetchScript(sURL)
+					js, err := fetcher.FetchScript(sURL, cc.Limiter)
 					if err != nil {
 						cc.LogError(sURL, "script", err.Error())
 						continue
@@ -935,7 +936,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				}
 			} else {
 				// Standard mode
-				html, err := fetcher.FetchPage(u)
+				html, err := fetcher.FetchPage(u, cc.Limiter)
 				if err != nil {
 					fmt.Printf("  ⚠ %v\n", err)
 					return
@@ -948,7 +949,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 					if err := cc.CheckURL(sURL, "script"); err != nil {
 						continue
 					}
-					js, err := fetcher.FetchScript(sURL)
+					js, err := fetcher.FetchScript(sURL, cc.Limiter)
 					if err != nil {
 						cc.LogError(sURL, "script", err.Error())
 						continue
@@ -970,7 +971,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 					cookies = auth.Cookies
 					customHeaders = auth.Headers
 				}
-				wafResult := wafpkg.DetectWAF(u, cookies, customHeaders)
+				wafResult := wafpkg.DetectWAF(u, cookies, customHeaders, cc.Limiter)
 				if wafResult.Detected {
 					effectiveWAF = wafpkg.GetRecommendedWAF(wafResult.Name)
 					if effectiveWAF != "" {
@@ -990,7 +991,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				// Parameter discovery for this URL
 				var urlParams []string
 				if doMine && !doSPA {
-					html, err := fetcher.FetchPage(u)
+					html, err := fetcher.FetchPage(u, cc.Limiter)
 					if err == nil {
 						discovered := miner.MineParamsFromHTML(html)
 						if len(manualParams) > 0 {
@@ -1036,7 +1037,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 			allVerifyResults = append(allVerifyResults, verifyResults...)
 			scanned++
 			mu.Unlock()
-		}(targetURL)
+		}(targetURL, i)
 	}
 
 	wg.Wait()

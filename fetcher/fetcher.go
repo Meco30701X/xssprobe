@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"regexp"
 	"time"
+
+	"github.com/Meco30701X/xssprobe/compliance"
 )
 
 // proxyURL stores the HTTP proxy URL (empty = no proxy)
@@ -32,7 +34,11 @@ func httpClient() *http.Client {
 }
 
 // FetchPage fetches a URL and returns the HTML content
-func FetchPage(fetchURL string) (string, error) {
+// limiter can be nil; if provided, rate limit is applied before the request
+func FetchPage(fetchURL string, limiter *compliance.RateLimiter) (string, error) {
+	if limiter != nil {
+		limiter.Wait()
+	}
 	client := httpClient()
 	resp, err := client.Get(fetchURL)
 	if err != nil {
@@ -103,6 +109,7 @@ func ExtractScriptURLs(html string, baseURL string) []string {
 }
 
 // FetchScript fetches an external JavaScript file
-func FetchScript(url string) (string, error) {
-	return FetchPage(url)
+// limiter can be nil; if provided, rate limit is applied before the request
+func FetchScript(url string, limiter *compliance.RateLimiter) (string, error) {
+	return FetchPage(url, limiter)
 }

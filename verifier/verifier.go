@@ -22,6 +22,7 @@ type VerifyResult struct {
 	Source    string `json:"source"`
 	Triggered bool   `json:"triggered"`
 	Detail    string `json:"detail"`
+	CORSDisabled bool `json:"cors_disabled,omitempty"` // Was CORS disabled during this test?
 }
 
 // AuthConfig holds authentication info for requests
@@ -427,7 +428,7 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 }
 
 func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
-	result := VerifyResult{Payload: payload, Source: "hash"}
+	result := VerifyResult{Payload: payload, Source: "hash", CORSDisabled: disableCORS}
 	testURL := baseURL + "#" + url.QueryEscape(payload)
 
 	if limiter != nil {
@@ -486,7 +487,7 @@ func testHash(baseURL, payload string, auth *AuthConfig, limiter *compliance.Rat
 }
 
 func testSearchParam(baseURL, param, payload string, auth *AuthConfig, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
-	result := VerifyResult{Payload: payload, Source: "search:" + param}
+	result := VerifyResult{Payload: payload, Source: "search:" + param, CORSDisabled: disableCORS}
 
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
@@ -1032,5 +1033,19 @@ func PrintResults(results []VerifyResult) {
 		fmt.Println("  [✓] No DOM XSS confirmed by dynamic analysis")
 	} else {
 		fmt.Printf("\n  [!] %d payload(s) confirmed exploitable\n", confirmed)
+	}
+
+	// Check if any results were obtained with CORS disabled
+	corsDisabled := false
+	for _, r := range results {
+		if r.CORSDisabled {
+			corsDisabled = true
+			break
+		}
+	}
+	if corsDisabled && confirmed > 0 {
+		fmt.Println("\n  ⚠️  WARNING: These results were obtained with -disable-cors (browser same-origin policy disabled).")
+		fmt.Println("     Results may NOT represent real-world browser behavior.")
+		fmt.Println("     Only use this in isolated testing environments.")
 	}
 }

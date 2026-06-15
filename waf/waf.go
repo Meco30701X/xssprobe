@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/Meco30701X/xssprobe/compliance"
 )
 
 // WAFResult holds WAF detection result
@@ -566,9 +568,15 @@ func getWAFSignatures() []WAFSignature {
 }
 
 // DetectWAF sends a probe request and fingerprints the WAF
-func DetectWAF(targetURL string, cookies []string, headers map[string]string) *WAFResult {
+// limiter can be nil; if provided, rate limit is applied before the request
+func DetectWAF(targetURL string, cookies []string, headers map[string]string, limiter *compliance.RateLimiter) *WAFResult {
 	// Build probe URL with malicious-looking parameter
 	probeURL := buildProbeURL(targetURL)
+
+	// Apply rate limit if provided
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	client := &http.Client{
 		Timeout: 10 * time.Second,

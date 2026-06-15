@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Meco30701X/xssprobe/compliance"
 	"github.com/Meco30701X/xssprobe/scanner"
 	"github.com/Meco30701X/xssprobe/verifier"
 )
@@ -20,13 +21,14 @@ type AnalysisResult struct {
 
 // AnalysisConfig configures the combined analysis
 type AnalysisConfig struct {
-	DoVerify     bool   // Perform dynamic verification
-	WAF          string // WAF type for payload selection
-	MaxVerify    int    // Max findings to verify (0 = all)
-	OnlyHigh     bool   // Only verify high severity findings
-	SkipFiltered bool   // Skip findings with detected filtering
-	DisableCORS  bool   // Disable browser same-origin policy
-	Proxy        string // HTTP proxy URL
+	DoVerify     bool                        // Perform dynamic verification
+	WAF          string                      // WAF type for payload selection
+	MaxVerify    int                         // Max findings to verify (0 = all)
+	OnlyHigh     bool                        // Only verify high severity findings
+	SkipFiltered bool                        // Skip findings with detected filtering
+	DisableCORS  bool                        // Disable browser same-origin policy
+	Proxy        string                      // HTTP proxy URL
+	Limiter      *compliance.RateLimiter     // Rate limiter for verification requests
 }
 
 // DefaultAnalysisConfig returns default analysis configuration
@@ -108,7 +110,7 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 				results[i].Finding.Source, results[i].Finding.Sink,
 				results[i].Finding.Line)
 
-			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF, config.DisableCORS, config.Proxy)
+			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF, config.DisableCORS, config.Proxy, config.Limiter)
 			results[i].Verified = true
 			results[i].VerifyResult = &verifyResult
 			results[i].Confirmed = verifyResult.Triggered
@@ -131,7 +133,7 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 }
 
 // verifyFinding performs dynamic verification for a specific finding
-func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string, disableCORS bool, proxy string) verifier.VerifyResult {
+func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string, disableCORS bool, proxy string, limiter *compliance.RateLimiter) verifier.VerifyResult {
 	// Determine which verification method to use based on the source
 	source := strings.ToLower(finding.Source)
 
@@ -148,8 +150,7 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 
 	// For postMessage sources
 	if strings.Contains(source, "message") || strings.Contains(source, "postmessage") {
-		// postMessage requires special handling
-		return verifier.VerifyPostMessage(targetURL, auth, waf, nil, disableCORS, proxy)
+		return verifier.VerifyPostMessage(targetURL, auth, waf, limiter, disableCORS, proxy)
 	}
 
 	// Default: test both hash and search params

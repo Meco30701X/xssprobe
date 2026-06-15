@@ -43,8 +43,17 @@ func OutputHTML(findings []scanner.Finding, results []verifier.VerifyResult, tar
 	// Calculate summary
 	data.Summary = calculateSummary(findings, results)
 
+	// Detect if CORS was disabled
+	corsDisabled := false
+	for _, r := range results {
+		if r.CORSDisabled {
+			corsDisabled = true
+			break
+		}
+	}
+
 	// Generate HTML
-	htmlContent := generateHTML(data)
+	htmlContent := generateHTML(data, corsDisabled)
 
 	// Write to file
 	return os.WriteFile(filename, []byte(htmlContent), 0644)
@@ -88,7 +97,7 @@ func calculateSummary(findings []scanner.Finding, results []verifier.VerifyResul
 	return s
 }
 
-func generateHTML(data HTMLReportData) string {
+func generateHTML(data HTMLReportData, corsDisabled bool) string {
 	var sb strings.Builder
 
 	sb.WriteString(`<!DOCTYPE html>
@@ -181,6 +190,18 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 </div>
 </div>
 `)
+
+	// CORS-disabled warning
+	if corsDisabled {
+		sb.WriteString(`
+	<div style="background: #fff3cd; border: 2px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+	<strong>⚠️ 安全警告</strong><br>
+	本次扫描使用了 <code>-disable-cors</code> 参数，禁用了浏览器同源策略。<br>
+	验证结果<strong>不等同于真实浏览器环境</strong>下的行为，可能产生误报。<br>
+	仅限隔离测试环境使用此选项。
+	</div>
+	`)
+	}
 
 	// Findings
 	for i, f := range data.Findings {

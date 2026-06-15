@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/Meco30701X/xssprobe/compliance"
 )
 
 // InjectionContext represents where the payload is reflected
@@ -33,12 +35,18 @@ type ContextResult struct {
 }
 
 // DetectContext sends a canary probe and analyzes the reflection context
-func DetectContext(targetURL string, paramName string, cookies []string, headers map[string]string) *ContextResult {
+// limiter can be nil; if provided, rate limit is applied before the request
+func DetectContext(targetURL string, paramName string, cookies []string, headers map[string]string, limiter *compliance.RateLimiter) *ContextResult {
 	// Unique canary for detection
 	canary := "xXxCTXxXx7xXx"
 
 	// Build test URL
 	testURL := buildTestURL(targetURL, paramName, canary)
+
+	// Apply rate limit if provided
+	if limiter != nil {
+		limiter.Wait()
+	}
 
 	// Send request
 	client := &http.Client{Timeout: 10 * time.Second}
