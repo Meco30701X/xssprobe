@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Meco30701X/xssprobe/compliance"
-	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
 
@@ -159,27 +158,11 @@ func (c *Crawler) crawlPage(pageURL string, depth int) {
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
 
-	// Apply auth
-	if len(c.config.AuthCookies) > 0 || len(c.config.Headers) > 0 {
-		var actions []chromedp.Action
-		for _, cookie := range c.config.AuthCookies {
-			parts := strings.SplitN(cookie, "=", 2)
-			if len(parts) == 2 {
-				actions = append(actions, network.SetCookie(parts[0], parts[1]).WithPath("/"))
-			}
-		}
-		if len(c.config.Headers) > 0 {
-			headerMap := network.Headers{}
-			for k, v := range c.config.Headers {
-				headerMap[k] = v
-			}
-			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
-		}
-		if len(actions) > 0 {
-			if err := chromedp.Run(taskCtx, actions...); err != nil {
-				fmt.Printf("  [!] Warning: auth setup failed: %v\n", err)
-			}
-		}
+	if err := compliance.InstallBrowserPolicy(taskCtx, pageURL, c.config.AuthCookies, c.config.Headers, c.config.Compliance, nil); err != nil {
+		c.mu.Lock()
+		c.errors = append(c.errors, fmt.Sprintf("browser policy: %s: %v", pageURL, err))
+		c.mu.Unlock()
+		return
 	}
 
 	// Extract links and title

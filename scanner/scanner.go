@@ -7,14 +7,34 @@ import (
 
 // Finding represents a potential DOM XSS vulnerability
 type Finding struct {
-	Source      string
-	Sink        string
-	Code        string
-	Line        int
-	Severity    string
-	Filtered    bool     // Whether filtering was detected
-	FilterType  string   // Type of filtering detected
-	Confidence  string   // Confidence level: high/medium/low
+	Source     string
+	Sink       string
+	Code       string
+	Line       int
+	Severity   string
+	Filtered   bool   // Whether filtering was detected
+	FilterType string // Type of filtering detected
+	Confidence string // Confidence level: high/medium/low
+}
+
+// FilterThirdPartyFindings removes low-confidence heuristics from scripts
+// outside the target's shared allowlisted domain. Generic libraries contain
+// many sink implementations but usually no attacker-controlled callsite; the
+// high-confidence source-to-sink findings are retained for review.
+func FilterThirdPartyFindings(findings []Finding, firstParty bool) ([]Finding, int) {
+	if firstParty {
+		return findings, 0
+	}
+	filtered := make([]Finding, 0, len(findings))
+	suppressed := 0
+	for _, finding := range findings {
+		if finding.Confidence == "low" {
+			suppressed++
+			continue
+		}
+		filtered = append(filtered, finding)
+	}
+	return filtered, suppressed
 }
 
 // TaintTracker tracks variable assignments from sources
@@ -27,13 +47,13 @@ type TaintTracker struct {
 
 func NewTaintTracker() *TaintTracker {
 	return &TaintTracker{
-		taintedVars:   make(map[string]string),
-		filteredVars:  make(map[string]FilterInfo),
+		taintedVars:  make(map[string]string),
+		filteredVars: make(map[string]FilterInfo),
 	}
 }
 
 // assignRe matches: var/let/const x = ... or x = ...
-var assignRe = regexp.MustCompile(`(?:(?:var|let|const)\s+)?(\w+)\s*=\s*(.+)`)
+var assignRe = regexp.MustCompile(`^\s*(?:(?:var|let|const)\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(.+)`)
 
 // concatRe matches string concatenation: 'str' + var or var + 'str'
 var concatRe = regexp.MustCompile(`['"]\s*\+\s*(\w+)|(\w+)\s*\+\s*['"]`)
@@ -104,8 +124,8 @@ func (t *TaintTracker) TrackLine(line string) {
 		if taintedVar == varName {
 			continue
 		}
-		if strings.Contains(value, taintedVar) {
-			t.taintedVars[varName] = sourceName + "(via "+taintedVar+")"
+		if containsIdentifier(value, taintedVar) {
+			t.taintedVars[varName] = sourceName + "(via " + taintedVar + ")"
 			// Propagate filter status if the source was filtered
 			if filter, ok := t.filteredVars[taintedVar]; ok {
 				t.filteredVars[varName] = filter
@@ -120,7 +140,7 @@ func (t *TaintTracker) TrackLine(line string) {
 		if taintedVar == varName {
 			continue
 		}
-		if strings.Contains(value, taintedVar) {
+		if containsIdentifier(value, taintedVar) {
 			return // Preserve taint - still references tainted variable
 		}
 	}
@@ -149,18 +169,27 @@ func (t *TaintTracker) GetTaintedVars() map[string]string {
 func ScanJS(jsContent string) []Finding {
 	var findings []Finding
 	lines := strings.Split(jsContent, "\n")
+	shadowedVars := functionParameterShadows(lines)
 
 	tracker := NewTaintTracker()
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		rawLine := trimmed
 		if trimmed == "" || strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		trimmed = maskCommentsAndStrings(trimmed)
+		if strings.TrimSpace(trimmed) == "" {
 			continue
 		}
 
 		// === Pass 1: Same-line source→sink detection ===
 		for _, pattern := range getVulnerablePatterns() {
-			if pattern.SourceRe.MatchString(trimmed) && pattern.SinkRe.MatchString(trimmed) {
+			if pattern.SinkName == "setAttribute" && isSafeSetAttribute(rawLine) {
+				continue
+			}
+			if sourceUsedAsValue(trimmed, pattern.SourceRe) && pattern.SinkRe.MatchString(trimmed) {
 				filterInfo := detectFilter(trimmed)
 				severity := "high"
 				confidence := "high"
@@ -187,13 +216,19 @@ func ScanJS(jsContent string) []Finding {
 
 		// Check if any sink uses a tainted variable
 		for _, sink := range getSinks() {
+			if sink.Name == "setAttribute" && isSafeSetAttribute(rawLine) {
+				continue
+			}
 			if !sink.Re.MatchString(trimmed) {
 				continue
 			}
 
 			// Check if the sink line references any tainted variable
 			for taintedVar, sourceName := range tracker.GetTaintedVars() {
-				if strings.Contains(trimmed, taintedVar) {
+				if shadowedVars[i][taintedVar] {
+					continue
+				}
+				if containsIdentifier(trimmed, taintedVar) {
 					// Avoid duplicate with same-line detection
 					alreadyFound := false
 					for _, f := range findings {
@@ -237,7 +272,7 @@ func ScanJS(jsContent string) []Finding {
 
 		// === Pass 3: Standalone sink detection (fallback) ===
 		for _, sink := range getSinks() {
-			if sink.Re.MatchString(trimmed) {
+			if sink.Re.MatchString(trimmed) && reportUnknownSourceSink(sink.Name) {
 				alreadyFound := false
 				for _, f := range findings {
 					if f.Line == i+1 && f.Sink == sink.Name {
@@ -247,11 +282,12 @@ func ScanJS(jsContent string) []Finding {
 				}
 				if !alreadyFound {
 					findings = append(findings, Finding{
-						Source:   "unknown",
-						Sink:     sink.Name,
-						Code:     trimmed,
-						Line:     i + 1,
-						Severity: "medium",
+						Source:     "unknown",
+						Sink:       sink.Name,
+						Code:       trimmed,
+						Line:       i + 1,
+						Severity:   "low",
+						Confidence: "low",
 					})
 				}
 			}
@@ -259,6 +295,185 @@ func ScanJS(jsContent string) []Finding {
 	}
 
 	return findings
+}
+
+// functionParameterShadows marks function-body lines where a parameter
+// shadows a same-named tainted variable from an outer scope. It is a narrow
+// lexical safeguard for the line-oriented tracker, not a replacement for an
+// AST or full JavaScript scope analysis.
+func functionParameterShadows(lines []string) []map[string]bool {
+	shadowed := make([]map[string]bool, len(lines))
+	functionRe := regexp.MustCompile(`\bfunction\s*\w*\s*\(([^)]*)\)\s*\{`)
+	for i := range shadowed {
+		shadowed[i] = make(map[string]bool)
+	}
+	for start, raw := range lines {
+		line := maskCommentsAndStrings(raw)
+		match := functionRe.FindStringSubmatch(line)
+		if match == nil {
+			continue
+		}
+		params := regexp.MustCompile(`[a-zA-Z_$][a-zA-Z0-9_$]*`).FindAllString(match[1], -1)
+		if len(params) == 0 {
+			continue
+		}
+		depth := 0
+		for n := 0; n < start; n++ {
+			depth += braceDelta(maskCommentsAndStrings(lines[n]))
+		}
+		lineDelta := braceDelta(line)
+		bodyDepth := depth + lineDelta
+		if bodyDepth <= depth {
+			for _, name := range params {
+				shadowed[start][name] = true
+			}
+			continue
+		}
+		for n := start; n < len(lines); n++ {
+			for _, name := range params {
+				shadowed[n][name] = true
+			}
+			depth += braceDelta(maskCommentsAndStrings(lines[n]))
+			if depth < bodyDepth {
+				break
+			}
+		}
+	}
+	return shadowed
+}
+
+func braceDelta(line string) int {
+	delta := 0
+	for _, r := range line {
+		if r == '{' {
+			delta++
+		} else if r == '}' {
+			delta--
+		}
+	}
+	return delta
+}
+
+// maskCommentsAndStrings keeps executable JavaScript text while replacing
+// quoted text and comments with spaces. This prevents source/sink keywords in
+// documentation and literals from being treated as executable flows.
+func maskCommentsAndStrings(line string) string {
+	b := []byte(line)
+	quote := byte(0)
+	escaped := false
+	templateExpression := false
+	for i := 0; i < len(b); i++ {
+		c := b[i]
+		if quote != 0 {
+			if quote == '`' && c == '$' && i+1 < len(b) && b[i+1] == '{' {
+				quote = 0
+				templateExpression = true
+				i++
+				continue
+			}
+			if c != ' ' && c != '\t' {
+				b[i] = ' '
+			}
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if templateExpression && c == '}' {
+			templateExpression = false
+			quote = '`'
+			continue
+		}
+		if c == '/' && i+1 < len(b) && b[i+1] == '/' {
+			for j := i; j < len(b); j++ {
+				if b[j] != '\t' {
+					b[j] = ' '
+				}
+			}
+			break
+		}
+		if c == '/' && i+1 < len(b) && b[i+1] == '*' {
+			for j := i; j < len(b); j++ {
+				if b[j] != '\t' {
+					b[j] = ' '
+				}
+			}
+			break
+		}
+		if c == '\'' || c == '"' || c == '`' {
+			quote = c
+			b[i] = ' '
+		}
+	}
+	return string(b)
+}
+
+func containsIdentifier(code, identifier string) bool {
+	if identifier == "" {
+		return false
+	}
+	re := regexp.MustCompile(`(?:^|[^a-zA-Z0-9_$])` + regexp.QuoteMeta(identifier) + `(?:$|[^a-zA-Z0-9_$])`)
+	return re.MatchString(code)
+}
+
+// isSafeSetAttribute recognizes a narrow set of literal attributes whose
+// values are inert text. Dynamic names and URL/event/style attributes remain
+// sinks because their safety depends on the value and browser context.
+func isSafeSetAttribute(line string) bool {
+	if !strings.Contains(line, ".setAttribute") {
+		return false
+	}
+	args := regexp.MustCompile(`(?i)\.setAttribute\s*\(\s*['"]([^'"]+)['"]`).FindStringSubmatch(line)
+	if len(args) < 2 {
+		return false
+	}
+	name := strings.ToLower(args[1])
+	if strings.HasPrefix(name, "data-") || strings.HasPrefix(name, "aria-") {
+		return true
+	}
+	switch name {
+	case "title", "class", "id", "role", "dir", "lang", "hidden", "tabindex":
+		return true
+	default:
+		return false
+	}
+}
+
+// sourceUsedAsValue excludes matches that are only assignment targets, such
+// as `node.innerHTML = ...`. Treating the sink's left-hand side as a source
+// hides the real tainted value propagated to that sink.
+func sourceUsedAsValue(line string, sourceRe *regexp.Regexp) bool {
+	for _, match := range sourceRe.FindAllStringIndex(line, -1) {
+		suffix := strings.TrimLeft(line[match[1]:], " \t")
+		if strings.HasPrefix(suffix, "=") && !strings.HasPrefix(suffix, "==") && !strings.HasPrefix(suffix, "=>") {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+// reportUnknownSourceSink limits sink-only fallback findings to APIs that
+// parse HTML or execute code. Generic DOM lookups, storage writes, and node
+// operations are not XSS by themselves and generated noise on ordinary pages.
+func reportUnknownSourceSink(name string) bool {
+	switch name {
+	case "eval", "setTimeout", "setInterval", "Function", "script.src",
+		"innerHTML", "outerHTML", "document.write", "insertAdjacentHTML",
+		"jQuery.html", "jQuery.htmlPrefilter", "React dangerouslySetInnerHTML",
+		"Vue v-html", "Angular [innerHTML]", "Angular $compile":
+		return true
+	default:
+		return false
+	}
 }
 
 type vulnerablePattern struct {
@@ -323,6 +538,7 @@ func getSources() []pattern {
 
 		// === URL/HTTP Sources ===
 		{"postMessage", regexp.MustCompile(`postMessage|addEventListener\s*\(\s*['"]message['"]`)},
+		{"message event data", regexp.MustCompile(`(?:event|evt|ev|e)\.data\b`)},
 		{"XMLHttpRequest", regexp.MustCompile(`XMLHttpRequest|\.responseText|\.response\b`)},
 		{"fetch", regexp.MustCompile(`fetch\s*\(|\.then\s*\(|\.json\s*\(`)},
 		{"URL", regexp.MustCompile(`new\s+URL\s*\(|URL\.parse|URLSearchParams`)},
@@ -388,7 +604,7 @@ func getSinks() []pattern {
 		{"setInterval", regexp.MustCompile(`setInterval\s*\(`)},
 		{"Function", regexp.MustCompile(`new\s+Function\s*\(|Function\s*\(`)},
 		{"script.src", regexp.MustCompile(`(?:script|iframe|embed|object)\.src\s*=`)},
-		{"script.text", regexp.MustCompile(`\.text\s*=|\.textContent\s*=|\.innerText\s*=`)},
+		{"script.text", regexp.MustCompile(`\.text\s*=`)},
 
 		// === DOM Manipulation Sinks ===
 		{"innerHTML", regexp.MustCompile(`\.innerHTML\s*=`)},
@@ -432,10 +648,6 @@ func getSinks() []pattern {
 		// === Cookie Sinks ===
 		{"document.cookie", regexp.MustCompile(`document\.cookie\s*=`)},
 
-		// === Storage Sinks ===
-		{"localStorage.setItem", regexp.MustCompile(`localStorage\.setItem\s*\(|localStorage\[`)},
-		{"sessionStorage.setItem", regexp.MustCompile(`sessionStorage\.setItem\s*\(|sessionStorage\[`)},
-
 		// === Ajax/Fetch Sinks ===
 		{"$.ajax", regexp.MustCompile(`\$\.ajax\s*\(|jQuery\.ajax\s*\(`)},
 		{"$.get", regexp.MustCompile(`\$\.get\s*\(|jQuery\.get\s*\(`)},
@@ -448,13 +660,6 @@ func getSinks() []pattern {
 		// === Message Sinks ===
 		{"postMessage", regexp.MustCompile(`\.postMessage\s*\(`)},
 		{"BroadcastChannel", regexp.MustCompile(`BroadcastChannel.*\.postMessage`)},
-
-		// === DOM Clobbering Sinks ===
-		{"document.getElementById", regexp.MustCompile(`getElementById\s*\(`)},
-		{"document.getElementsByName", regexp.MustCompile(`getElementsByName\s*\(`)},
-		{"document.querySelector", regexp.MustCompile(`querySelector\s*\(`)},
-		{"document.getElementsByClassName", regexp.MustCompile(`getElementsByClassName\s*\(`)},
-		{"document.getElementsByTagName", regexp.MustCompile(`getElementsByTagName\s*\(`)},
 
 		// === Prototype Pollution Sinks ===
 		{"Object.assign", regexp.MustCompile(`Object\.assign\s*\(`)},
@@ -609,7 +814,7 @@ func detectFilter(line string) FilterInfo {
 		{"innertext", "innerText"},
 		{"textcontent", "textContent"},
 		{"createTextNode", "createTextNode"},
-		{"setattribute", "setAttribute"}, // for non-dangerous attributes
+		{"createtextnode", "createTextNode"},
 	}
 	for _, d := range safeDOM {
 		if strings.Contains(lower, d.pattern) {

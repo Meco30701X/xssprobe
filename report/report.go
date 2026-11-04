@@ -153,7 +153,20 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 		targetPage = pageURL[0]
 	}
 
-	fmt.Printf("\n[!] %s - %d potential DOM XSS found\n", sourceURL, len(findings))
+	linkedFlows := 0
+	sinkOnly := 0
+	for _, finding := range findings {
+		if finding.Source == "unknown" {
+			sinkOnly++
+		} else {
+			linkedFlows++
+		}
+	}
+	if linkedFlows == 0 {
+		fmt.Printf("\n[*] %s - no source-to-sink XSS flow established; %d unlinked sink candidate(s) for manual review\n", sourceURL, sinkOnly)
+	} else {
+		fmt.Printf("\n[!] %s - %d source-to-sink candidate(s), %d unlinked sink candidate(s)\n", sourceURL, linkedFlows, sinkOnly)
+	}
 	fmt.Println("─────────────────────────────────────────")
 
 	for i, f := range findings {
@@ -166,7 +179,11 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 		color := severityColor[f.Severity]
 
 		fmt.Printf("  #%d [%s%s%s]\n", i+1, color, f.Severity, reset)
-		fmt.Printf("    Source: %s → Sink: %s\n", f.Source, f.Sink)
+		if f.Source == "unknown" {
+			fmt.Printf("    Source: not established → Sink: %s (sink-only heuristic)\n", f.Sink)
+		} else {
+			fmt.Printf("    Source: %s → Sink: %s\n", f.Source, f.Sink)
+		}
 		fmt.Printf("    Line %d: %s\n", f.Line, f.Code)
 
 		// Show filter information if detected
@@ -178,8 +195,12 @@ func PrintFindings(findings []scanner.Finding, sourceURL string, pageURL ...stri
 		}
 
 		// Show actionable injection details based on source type
-		payload, isFiltered, needsManual := suggestPayload(f.Sink, f.FilterType)
-		printInjectionDetails(f.Source, payload, targetPage, isFiltered, needsManual)
+		if f.Source == "unknown" {
+			fmt.Println("    No controllable input source or source-to-sink flow was established; treat this as a manual review lead, not a confirmed XSS.")
+		} else {
+			payload, isFiltered, needsManual := suggestPayload(f.Sink, f.FilterType)
+			printInjectionDetails(f.Source, payload, targetPage, isFiltered, needsManual)
+		}
 
 		fmt.Println()
 	}
@@ -324,21 +345,18 @@ func OutputJSON(findings []scanner.Finding, filename string) error {
 // OutputVerifiedJSON writes both static findings and verification results to JSON
 func OutputVerifiedJSON(findings []scanner.Finding, results []verifier.VerifyResult, filename string) error {
 	type output struct {
-		StaticFindings      []scanner.Finding      `json:"static_findings"`
+		StaticFindings      []scanner.Finding       `json:"static_findings"`
 		DynamicVerification []verifier.VerifyResult `json:"dynamic_verification"`
 	}
 
-	// Filter to only confirmed results
-	var confirmed []verifier.VerifyResult
-	for _, r := range results {
-		if r.Triggered {
-			confirmed = append(confirmed, r)
-		}
-	}
+	// Keep failed and inconclusive attempts alongside confirmations. Dropping
+	// them makes an unavailable browser indistinguishable from a clean result.
+	verification := make([]verifier.VerifyResult, len(results))
+	copy(verification, results)
 
 	data, err := json.MarshalIndent(output{
 		StaticFindings:      findings,
-		DynamicVerification: confirmed,
+		DynamicVerification: verification,
 	}, "", "  ")
 	if err != nil {
 		return err

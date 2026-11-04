@@ -34,14 +34,18 @@
 
 | 功能 | 说明 |
 |------|------|
-| **域名范围锁定** | `-scope` 限制扫描范围，防止越界 |
-| **速率限制** | 令牌桶限速器，上限 100 req/s，防止对目标造成压力 |
+| **域名范围锁定** | `-scope` 限制 HTTP 请求、重定向和浏览器子请求的目标主机；可逗号分隔列出页面依赖的外部资源域名 |
+| **速率限制** | 平滑调度请求，上限 100 req/s，覆盖 HTTP、浏览器请求和 robots.txt 获取 |
 | **robots.txt 遵守** | 默认遵守爬虫规则 |
 | **审计日志** | JSON 格式记录所有请求，`-verify`/`-stored`/`-crawl` 自动启用 |
 | **法律声明** | 首次运行强制确认，`-yes` 必须配合 `-scope` 使用 |
 | **Stored XSS 默认 DryRun** | `-stored` 默认不提交数据，需显式 `-dry-run=false` 才写入 |
 | **危险 Payload 标记** | 数据外泄类 payload 标记为 `Dangerous`，默认排除，使用占位符域名 |
 | **清理提醒** | 存储型测试完成后自动提示清理测试数据 |
+
+浏览器认证头只会附加到起始 URL 的同源请求；跨源资源不会收到自定义认证头。浏览器请求超出 `-scope` 时会被拦截。
+
+`-scope` 默认建议只填写目标域名。只有在授权场景确实依赖外部脚本或 API 时，才把其确切主机追加到白名单，例如 `-scope target.example,cdn.example`；每个主机仍执行精确或子域匹配。
 
 ## 安装
 
@@ -99,10 +103,10 @@ go build -o xssprobe .
 ./xssprobe -u https://target.com -verify all
 
 # 快速验证（找到 1 个确认就停）
-./xssprobe -u https://target.com -verify 1
+./xssprobe -u https://target.com -verify=1
 
 # 测试到 3 个确认就停
-./xssprobe -u https://target.com -verify 3
+./xssprobe -u https://target.com -verify=3
 
 # 存储型 XSS 检测（默认 dry-run + safe + confirm，不提交数据）
 ./xssprobe -u https://target.com -stored
@@ -353,6 +357,8 @@ go test ./scanner/...
 go test ./compliance/...
 go test ./waf/...
 ```
+
+`go test ./scanner -run TestAccuracyCorpus -v` 还会运行静态扫描器的固定标注样例集，输出总体及留出集的 accuracy、precision、recall、TP/TN/FP/FN。当前样例集为 50 个人工构造的代码片段，其中 10 个预先标记为留出样例；这是回归基准，不代表真实网站或任意 JavaScript 项目的实际检测准确率。扫描器仍采用启发式分析，复杂作用域和跨函数数据流需要动态验证或人工复核。
 
 ## License
 

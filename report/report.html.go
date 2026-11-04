@@ -61,9 +61,17 @@ func OutputHTML(findings []scanner.Finding, results []verifier.VerifyResult, tar
 
 func calculateSummary(findings []scanner.Finding, results []verifier.VerifyResult) HTMLSummary {
 	s := HTMLSummary{Total: len(findings)}
+	linkedTotal := 0
+	filteredLinked := 0
 
 	// Count by severity
 	for _, f := range findings {
+		if f.Source != "unknown" {
+			linkedTotal++
+			if f.Filtered {
+				filteredLinked++
+			}
+		}
 		switch f.Severity {
 		case "high":
 			s.High++
@@ -92,7 +100,7 @@ func calculateSummary(findings []scanner.Finding, results []verifier.VerifyResul
 	}
 
 	s.Confirmed = len(confirmedLines)
-	s.Possible = s.Total - s.Confirmed - s.Filtered
+	s.Possible = linkedTotal - s.Confirmed - filteredLinked
 
 	return s
 }
@@ -174,7 +182,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 <div class="summary">
 <div class="summary-card">
 <div class="number">` + fmt.Sprintf("%d", data.Summary.Total) + `</div>
-<div class="label">总发现</div>
+<div class="label">静态候选（含未关联 sink）</div>
 </div>
 <div class="summary-card confirmed">
 <div class="number">` + fmt.Sprintf("%d", data.Summary.Confirmed) + `</div>
@@ -205,6 +213,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 
 	// Findings
 	for i, f := range data.Findings {
+		flowLabel := "Source → Sink"
+		flowValue := html.EscapeString(f.Source) + " → " + html.EscapeString(f.Sink)
+		if f.Source == "unknown" {
+			flowLabel = "Static classification"
+			flowValue = "Unlinked sink only; attacker-controlled source and taint flow were not established"
+		}
 		sb.WriteString(fmt.Sprintf(`
 <div class="finding">
 <div class="finding-header">
@@ -213,15 +227,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 </div>
 <div class="finding-body">
 <div class="finding-section">
-<div class="label">漏洞链</div>
-<div class="value">%s → %s</div>
+<div class="label">%s</div>
+<div class="value">%s</div>
 </div>
 <div class="finding-section">
 <div class="label">代码片段</div>
 <div class="code-block"><span class="line-number">Line %d:</span>%s</div>
 </div>
 `, i+1, f.Line, f.Severity, strings.ToUpper(f.Severity),
-			html.EscapeString(f.Source), html.EscapeString(f.Sink),
+			html.EscapeString(flowLabel), flowValue,
 			f.Line, html.EscapeString(f.Code)))
 
 		// Filter warning
@@ -234,34 +248,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-
 `, html.EscapeString(f.FilterType)))
 		}
 
-		// Injection details
-		payload, isFiltered, needsManual := suggestPayload(f.Sink, f.FilterType)
-		paramName := extractParamName(f.Source)
+		if f.Source == "unknown" {
+			sb.WriteString(`<div class="finding-section"><div class="label">解释</div><div class="value">这是一个未关联输入来源的可执行 sink 候选，不作为已确认 XSS。结合页面数据流或动态验证判断。</div></div>`)
+		} else {
+			// Injection details
+			payload, isFiltered, needsManual := suggestPayload(f.Sink, f.FilterType)
+			paramName := extractParamName(f.Source)
 
-		if paramName != "" {
-			injectionURL := buildInjectionURL(data.TargetURL, paramName, payload)
-			if injectionURL != "" {
-				sb.WriteString(fmt.Sprintf(`
+			if paramName != "" {
+				injectionURL := buildInjectionURL(data.TargetURL, paramName, payload)
+				if injectionURL != "" {
+					sb.WriteString(fmt.Sprintf(`
 <div class="finding-section">
 <div class="label">🔗 注入 URL</div>
 <div class="injection-url"><a href="%s" target="_blank">%s</a></div>
 </div>
 `, html.EscapeString(injectionURL), html.EscapeString(injectionURL)))
+				}
 			}
-		}
 
-		sb.WriteString(fmt.Sprintf(`
+			sb.WriteString(fmt.Sprintf(`
 <div class="finding-section">
 <div class="label">💡 建议 Payload</div>
 <div class="payload">%s</div>
 </div>
 `, html.EscapeString(payload)))
 
-		if isFiltered {
-			if needsManual {
-				sb.WriteString(`<div class="status filtered">⚠️ 需要手动验证</div>`)
-			} else {
-				sb.WriteString(`<div class="status filtered">⚠️ 使用绕过 Payload</div>`)
+			if isFiltered {
+				if needsManual {
+					sb.WriteString(`<div class="status filtered">⚠️ 需要手动验证</div>`)
+				} else {
+					sb.WriteString(`<div class="status filtered">⚠️ 使用绕过 Payload</div>`)
+				}
 			}
 		}
 

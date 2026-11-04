@@ -15,10 +15,8 @@ const (
 
 // RateLimiter implements a token bucket rate limiter
 type RateLimiter struct {
-	rate       float64   // tokens per second
-	tokens     float64   // current available tokens
-	maxTokens  float64   // max burst size
-	lastRefill time.Time // last token refill time
+	rate      float64
+	nextPermit time.Time
 	mu         sync.Mutex
 }
 
@@ -33,35 +31,24 @@ func NewRateLimiter(ratePerSecond int) *RateLimiter {
 	}
 	return &RateLimiter{
 		rate:       float64(ratePerSecond),
-		tokens:     float64(ratePerSecond), // start full
-		maxTokens:  float64(ratePerSecond),
-		lastRefill: time.Now(),
+		nextPermit: time.Now(),
 	}
 }
 
 // Wait blocks until a token is available
 func (r *RateLimiter) Wait() {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	now := time.Now()
-	elapsed := now.Sub(r.lastRefill).Seconds()
-	r.tokens += elapsed * r.rate
-	if r.tokens > r.maxTokens {
-		r.tokens = r.maxTokens
+	permit := r.nextPermit
+	if permit.Before(now) {
+		permit = now
 	}
-	r.lastRefill = now
+	interval := time.Duration(float64(time.Second) / r.rate)
+	r.nextPermit = permit.Add(interval)
+	r.mu.Unlock()
 
-	if r.tokens < 1 {
-		// Need to wait for a token
-		waitTime := time.Duration((1 - r.tokens) / r.rate * float64(time.Second))
-		r.mu.Unlock()
-		time.Sleep(waitTime)
-		r.mu.Lock()
-		r.tokens = 0
-		r.lastRefill = time.Now()
-	} else {
-		r.tokens--
+	if wait := time.Until(permit); wait > 0 {
+		time.Sleep(wait)
 	}
 }
 
@@ -77,7 +64,9 @@ func (r *RateLimiter) SetRate(ratePerSecond int) {
 		ratePerSecond = MaxRateLimit
 	}
 	r.rate = float64(ratePerSecond)
-	r.maxTokens = float64(ratePerSecond)
+	if r.nextPermit.Before(time.Now()) {
+		r.nextPermit = time.Now()
+	}
 }
 
 // GetRate returns the current rate limit

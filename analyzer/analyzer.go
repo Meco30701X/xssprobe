@@ -11,24 +11,24 @@ import (
 
 // AnalysisResult represents the combined analysis result
 type AnalysisResult struct {
-	Finding      scanner.Finding    // Original static finding
-	Verified     bool               // Whether dynamic verification was performed
-	Confirmed    bool               // Whether vulnerability was confirmed
-	VerifyResult *verifier.VerifyResult // Dynamic verification result (if any)
-	Confidence   string             // Final confidence: confirmed/likely/possible/filtered
-	Recommendation string           // Action recommendation
+	Finding        scanner.Finding        // Original static finding
+	Verified       bool                   // Whether dynamic verification was performed
+	Confirmed      bool                   // Whether vulnerability was confirmed
+	VerifyResult   *verifier.VerifyResult // Dynamic verification result (if any)
+	Confidence     string                 // Final confidence: confirmed/likely/possible/filtered
+	Recommendation string                 // Action recommendation
 }
 
 // AnalysisConfig configures the combined analysis
 type AnalysisConfig struct {
-	DoVerify     bool                        // Perform dynamic verification
-	WAF          string                      // WAF type for payload selection
-	MaxVerify    int                         // Max findings to verify (0 = all)
-	OnlyHigh     bool                        // Only verify high severity findings
-	SkipFiltered bool                        // Skip findings with detected filtering
-	DisableCORS  bool                        // Disable browser same-origin policy
-	Proxy        string                      // HTTP proxy URL
-	Limiter      *compliance.RateLimiter     // Rate limiter for verification requests
+	DoVerify     bool                    // Perform dynamic verification
+	WAF          string                  // WAF type for payload selection
+	MaxVerify    int                     // Max findings to verify (0 = all)
+	OnlyHigh     bool                    // Only verify high severity findings
+	SkipFiltered bool                    // Skip findings with detected filtering
+	DisableCORS  bool                    // Disable browser same-origin policy
+	Proxy        string                  // HTTP proxy URL
+	Limiter      *compliance.RateLimiter // Rate limiter for verification requests
 }
 
 // DefaultAnalysisConfig returns default analysis configuration
@@ -53,10 +53,17 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 	highConfidence := filterByConfidence(findings, "high")
 	mediumConfidence := filterByConfidence(findings, "medium")
 	filteredFindings := getFilteredFindings(findings)
+	sinkOnly := 0
+	for _, finding := range findings {
+		if finding.Source == "unknown" {
+			sinkOnly++
+		}
+	}
 
 	fmt.Printf("\n📊 Static Analysis Summary:\n")
-	fmt.Printf("   High confidence (Source→Sink): %d\n", len(highConfidence))
-	fmt.Printf("   Medium confidence (Sink only): %d\n", len(mediumConfidence))
+	fmt.Printf("   High-confidence source→sink flows: %d\n", len(highConfidence))
+	fmt.Printf("   Medium-confidence findings: %d\n", len(mediumConfidence))
+	fmt.Printf("   Unlinked sink heuristics (not XSS findings): %d\n", sinkOnly)
 	fmt.Printf("   Filtered/Sanitized: %d\n", len(filteredFindings))
 	fmt.Printf("   Total findings: %d\n\n", len(findings))
 
@@ -139,13 +146,13 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 
 	// For hash-based sources
 	if strings.Contains(source, "hash") {
-		return verifier.TestHashOnly(targetURL, auth, waf, nil, disableCORS, proxy)
+		return verifier.TestHashOnlyWithLimiter(targetURL, auth, waf, nil, limiter, disableCORS, proxy)
 	}
 
 	// For search/parameter-based sources
 	if strings.Contains(source, "search") || strings.Contains(source, "param") ||
 		strings.Contains(source, "query") {
-		return verifier.TestSearchOnly(targetURL, auth, waf, nil, disableCORS, proxy)
+		return verifier.TestSearchOnlyWithLimiter(targetURL, auth, waf, nil, limiter, disableCORS, proxy)
 	}
 
 	// For postMessage sources
@@ -153,8 +160,10 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 		return verifier.VerifyPostMessage(targetURL, auth, waf, limiter, disableCORS, proxy)
 	}
 
-	// Default: test both hash and search params
-	return verifier.TestHashOnly(targetURL, auth, waf, nil, disableCORS, proxy)
+	return verifier.VerifyResult{
+		Source: finding.Source,
+		Detail: "dynamic replay is not implemented for this source type; static finding remains unconfirmed",
+	}
 }
 
 // filterByConfidence filters findings by confidence level
@@ -279,4 +288,3 @@ func truncateCode(code string, maxLen int) string {
 	}
 	return code[:maxLen-3] + "..."
 }
-

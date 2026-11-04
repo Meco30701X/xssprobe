@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Meco30701X/xssprobe/compliance"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
 )
@@ -27,15 +28,16 @@ type SPAConfig struct {
 	ScrollPage  bool          // Scroll page to trigger lazy loading
 	AuthCookies []string      // Cookies for authenticated pages
 	Headers     map[string]string
+	Compliance  *compliance.ComplianceContext
 }
 
 // SPAResult holds the result of SPA rendering
 type SPAResult struct {
-	RenderedHTML     string
-	InlineScripts    []string
-	ExternalScripts  []string
-	DynamicScripts   []string // Scripts injected after page load
-	RenderedURL      string   // Final URL after redirects/routing
+	RenderedHTML    string
+	InlineScripts   []string
+	ExternalScripts []string
+	DynamicScripts  []string // Scripts injected after page load
+	RenderedURL     string   // Final URL after redirects/routing
 }
 
 // DefaultSPAConfig returns a default SPA configuration
@@ -75,27 +77,14 @@ func FetchPageSPA(targetURL string, config *SPAConfig) (*SPAResult, error) {
 	taskCtx, taskCancel := chromedp.NewContext(allocCtx)
 	defer taskCancel()
 
-	// Apply auth if provided
-	if config != nil && (len(config.AuthCookies) > 0 || len(config.Headers) > 0) {
-		var actions []chromedp.Action
-		for _, cookie := range config.AuthCookies {
-			parts := strings.SplitN(cookie, "=", 2)
-			if len(parts) == 2 {
-				actions = append(actions, network.SetCookie(parts[0], parts[1]).WithPath("/"))
-			}
-		}
-		if len(config.Headers) > 0 {
-			headerMap := network.Headers{}
-			for k, v := range config.Headers {
-				headerMap[k] = v
-			}
-			actions = append(actions, network.SetExtraHTTPHeaders(headerMap))
-		}
-		if len(actions) > 0 {
-			if err := chromedp.Run(taskCtx, actions...); err != nil {
-				return nil, fmt.Errorf("auth setup failed: %w", err)
-			}
-		}
+	// Fetch interception needs an initialized CDP target. Initialize Chrome
+	// before enabling the request policy; otherwise Fetch.enable can fail with
+	// "invalid context" on the first browser operation.
+	if err := chromedp.Run(taskCtx, chromedp.Navigate("about:blank")); err != nil {
+		return nil, fmt.Errorf("browser startup failed: %w", err)
+	}
+	if err := compliance.InstallBrowserPolicy(taskCtx, targetURL, config.AuthCookies, config.Headers, config.Compliance, nil); err != nil {
+		return nil, fmt.Errorf("browser policy setup failed: %w", err)
 	}
 
 	// Collect dynamically injected scripts (mutex-protected for concurrent access)

@@ -60,7 +60,7 @@ func (c *ComplianceContext) CheckURL(rawURL string, requestType string) error {
 	if c.config.RespectRobots {
 		parsed, err := url.Parse(rawURL)
 		if err == nil {
-			rules, err := c.RobotsCache.GetRobots(rawURL)
+			rules, err := c.RobotsCache.GetRobots(rawURL, c.Limiter)
 			if err == nil && !rules.IsAllowed(parsed.Path) {
 				if c.Audit != nil {
 					c.Audit.LogBlocked(rawURL, requestType, "robots")
@@ -76,10 +76,9 @@ func (c *ComplianceContext) CheckURL(rawURL string, requestType string) error {
 		}
 	}
 
-	// 3. Rate limit
-	c.Limiter.Wait()
-
-	// 4. Log allowed request
+	// Rate limiting belongs immediately before the network request. Callers
+	// that use the shared HTTP or browser policy apply it there.
+	// 3. Record authorization; the actual response is recorded by the caller.
 	if c.Audit != nil {
 		c.Audit.LogAllowed(rawURL, requestType, 0, time.Since(start))
 	}
@@ -102,7 +101,7 @@ func (c *ComplianceContext) CheckURLWithStatus(rawURL string, requestType string
 	if c.config.RespectRobots {
 		parsed, err := url.Parse(rawURL)
 		if err == nil {
-			rules, err := c.RobotsCache.GetRobots(rawURL)
+			rules, err := c.RobotsCache.GetRobots(rawURL, c.Limiter)
 			if err == nil && !rules.IsAllowed(parsed.Path) {
 				if c.Audit != nil {
 					c.Audit.LogBlocked(rawURL, requestType, "robots")
@@ -111,8 +110,6 @@ func (c *ComplianceContext) CheckURLWithStatus(rawURL string, requestType string
 			}
 		}
 	}
-
-	c.Limiter.Wait()
 
 	if c.Audit != nil {
 		c.Audit.LogAllowed(rawURL, requestType, statusCode, time.Since(start))

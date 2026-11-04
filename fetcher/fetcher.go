@@ -13,15 +13,26 @@ import (
 
 // proxyURL stores the HTTP proxy URL (empty = no proxy)
 var proxyURL string
+var allowedScope string
 
 // SetProxy sets the HTTP proxy for all requests
 func SetProxy(proxy string) {
 	proxyURL = proxy
 }
 
+// SetScope applies the configured host scope to direct HTTP fetches and redirects.
+func SetScope(scope string) { allowedScope = scope }
+
 // httpClient creates an http.Client with optional proxy
 func httpClient() *http.Client {
 	client := &http.Client{Timeout: 15 * time.Second}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if err := compliance.ValidateScope(req.URL.String(), allowedScope); err != nil {
+			return err
+		}
+		if len(via) >= 10 { return fmt.Errorf("stopped after 10 redirects") }
+		return nil
+	}
 	if proxyURL != "" {
 		proxy, err := url.Parse(proxyURL)
 		if err == nil {
@@ -36,10 +47,20 @@ func httpClient() *http.Client {
 // FetchPage fetches a URL and returns the HTML content
 // limiter can be nil; if provided, rate limit is applied before the request
 func FetchPage(fetchURL string, limiter *compliance.RateLimiter) (string, error) {
+	if err := compliance.ValidateScope(fetchURL, allowedScope); err != nil {
+		return "", err
+	}
 	if limiter != nil {
 		limiter.Wait()
 	}
 	client := httpClient()
+	previousRedirectCheck := client.CheckRedirect
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if limiter != nil {
+			limiter.Wait()
+		}
+		return previousRedirectCheck(req, via)
+	}
 	resp, err := client.Get(fetchURL)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch %s: %w", fetchURL, err)

@@ -4,14 +4,15 @@ import (
 	"bufio"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Meco30701X/xssprobe/analyzer"
-	ctxpkg "github.com/Meco30701X/xssprobe/context"
 	"github.com/Meco30701X/xssprobe/compliance"
+	ctxpkg "github.com/Meco30701X/xssprobe/context"
 	"github.com/Meco30701X/xssprobe/fetcher"
 	"github.com/Meco30701X/xssprobe/miner"
 	"github.com/Meco30701X/xssprobe/payloads"
@@ -23,7 +24,7 @@ import (
 	wafpkg "github.com/Meco30701X/xssprobe/waf"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 type headerFlags map[string]string
 
@@ -113,10 +114,10 @@ func main() {
 	// Custom payload flags
 	customPayload := flag.String("payload", "", "Custom payload string to test")
 	payloadFile := flag.String("payloads", "", "File containing payloads (one per line)")
-	payloadMerge := flag.Bool("payload-merge", true, "Merge custom payloads with built-in (default: true)")
+	payloadMerge := flag.Bool("payload-merge", true, "Merge custom payloads with built-in; false uses custom payloads only")
 	payloadFirst := flag.Bool("payload-first", true, "Test custom payloads first (default: true)")
 	// Compliance flags
-	scope := flag.String("scope", "", "Restrict scanning to this domain (e.g. target.com)")
+	scope := flag.String("scope", "", "Restrict HTTP/browser requests to comma-separated allowed domains (e.g. target.com,cdn.example)")
 	rateLimit := flag.Int("rate", 2, "Max requests per second (rate limiting)")
 	auditLog := flag.String("audit", "", "Audit log file path (JSON lines)")
 	respectRobots := flag.Bool("respect-robots", true, "Respect robots.txt rules")
@@ -127,6 +128,12 @@ func main() {
 	headers := make(headerFlags)
 	flag.Var(&headers, "H", "Custom header (repeatable, e.g. -H \"K: V\")")
 	flag.Parse()
+	storedSafetyFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "dry-run" || f.Name == "safe" || f.Name == "confirm" {
+			storedSafetyFlags[f.Name] = true
+		}
+	})
 
 	// Version check
 	if *showVersion {
@@ -234,6 +241,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer complianceCtx.Close()
+	if auth == nil {
+		auth = &verifier.AuthConfig{}
+	}
+	auth.Compliance = complianceCtx
+	fetcher.SetScope(*scope)
 
 	// Set browser CORS policy
 	if *disableCORS {
@@ -305,11 +317,19 @@ func main() {
 		Confirm: *confirm,
 	}
 
-	// If stored mode without any safety flag, default to dry-run (safest)
-	if *stored && !*dryRun && !*safePayloads && !*confirm {
-		safetyMode.DryRun = true
-		safetyMode.Safe = true
-		safetyMode.Confirm = true
+	// Stored submissions default each control independently to the safer setting.
+	if *stored {
+		if !storedSafetyFlags["dry-run"] {
+			safetyMode.DryRun = true
+		}
+		if !storedSafetyFlags["safe"] {
+			safetyMode.Safe = true
+		}
+		if !storedSafetyFlags["confirm"] {
+			safetyMode.Confirm = true
+		}
+	}
+	if *stored && safetyMode.DryRun {
 		fmt.Println("[*] Stored XSS: dry-run mode enabled (no data will be submitted)")
 		fmt.Println("[*] To actually submit test data, use -stored -dry-run=false -safe -confirm")
 	}
@@ -422,7 +442,7 @@ func printUsage() {
 	fmt.Println("Custom Payload Flags:")
 	fmt.Println("  -payload        Custom payload string to test")
 	fmt.Println("  -payloads       File containing payloads (one per line)")
-	fmt.Println("  -payload-merge  Merge custom payloads with built-in (default: true)")
+	fmt.Println("  -payload-merge  Merge custom payloads with built-in; false uses custom payloads only")
 	fmt.Println("  -payload-first  Test custom payloads first (default: true)")
 	fmt.Println()
 	fmt.Println("Analysis Flags:")
@@ -436,13 +456,48 @@ func printUsage() {
 	fmt.Println("  -wordlist      Add common parameter wordlist to discovered params")
 	fmt.Println()
 	fmt.Println("Compliance Flags:")
-	fmt.Println("  -scope        Restrict scanning to this domain (e.g. target.com)")
+	fmt.Println("  -scope        Restrict HTTP/browser requests to comma-separated allowed domains")
 	fmt.Println("  -rate         Max requests per second (default: 2)")
 	fmt.Println("  -audit        Audit log file path (JSON lines)")
 	fmt.Println("  -respect-robots  Respect robots.txt rules (default: true)")
 	fmt.Println("  -yes          Skip legal confirmation (for CI/CD)")
 	fmt.Println()
 	fmt.Printf("Payload library: %d payloads available\n", payloads.Count())
+}
+
+func scanExternalScript(js, targetURL, scriptURL string, cc *compliance.ComplianceContext) []scanner.Finding {
+	target, targetErr := url.Parse(targetURL)
+	script, scriptErr := url.Parse(scriptURL)
+	firstParty := false
+	if targetErr == nil && scriptErr == nil && target.Hostname() != "" && script.Hostname() != "" {
+		scope := ""
+		if cc != nil {
+			scope = cc.GetConfig().Scope
+		}
+		if scope == "" {
+			firstParty = strings.EqualFold(target.Hostname(), script.Hostname())
+		} else {
+			for _, allowed := range strings.Split(scope, ",") {
+				allowed = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(allowed)), ".")
+				if allowed != "" && hostMatchesScope(target.Hostname(), allowed) && hostMatchesScope(script.Hostname(), allowed) {
+					firstParty = true
+					break
+				}
+			}
+		}
+	}
+
+	findings, suppressed := scanner.FilterThirdPartyFindings(scanner.ScanJS(js), firstParty)
+	if suppressed > 0 {
+		fmt.Printf("[*] Suppressed %d low-confidence heuristic(s) from external script %s\n", suppressed, scriptURL)
+	}
+	return findings
+}
+
+func hostMatchesScope(host, scope string) bool {
+	host = strings.TrimSuffix(strings.ToLower(host), ".")
+	scope = strings.TrimSuffix(strings.ToLower(scope), ".")
+	return host == scope || strings.HasSuffix(host, "."+scope)
 }
 
 // containsExfilPattern checks if a payload contains data exfiltration patterns
@@ -526,6 +581,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 		spaConfig := &fetcher.SPAConfig{
 			WaitTime:   time.Duration(waitTime) * time.Second,
 			ScrollPage: true,
+			Compliance: cc,
 		}
 		if auth != nil {
 			spaConfig.AuthCookies = auth.Cookies
@@ -560,7 +616,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 
 		// Scan dynamically loaded scripts (with compliance check)
@@ -573,7 +629,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 
 		// Detect SPA routes
@@ -618,7 +674,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 				cc.LogError(sURL, "script", err.Error())
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 	}
 
@@ -676,9 +732,10 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 		// Build payload config (thread-safe, no globals)
 		effectiveWAF := wafType
 		var payloadCfg *verifier.PayloadConfig
-		if len(customPayloads) > 0 && mergePayloads {
+		if len(customPayloads) > 0 {
 			fmt.Printf("[*] Using %d custom payloads\n", len(customPayloads))
 			payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
+			payloadCfg.CustomOnly = !mergePayloads
 		}
 
 		paramNames := miner.ParamNames(discoveredParams)
@@ -780,6 +837,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 		spaConfig := &fetcher.SPAConfig{
 			WaitTime:   time.Duration(waitTime) * time.Second,
 			ScrollPage: true,
+			Compliance: cc,
 		}
 		if auth != nil {
 			spaConfig.AuthCookies = auth.Cookies
@@ -803,7 +861,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err != nil {
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 		for _, sURL := range spaResult.DynamicScripts {
 			if err := cc.CheckURL(sURL, "script"); err != nil {
@@ -813,7 +871,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err != nil {
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 	} else {
 		fmt.Printf("[*] Fetching %s ...\n", targetURL)
@@ -837,7 +895,7 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 			if err != nil {
 				continue
 			}
-			allFindings = append(allFindings, scanner.ScanJS(js)...)
+			allFindings = append(allFindings, scanExternalScript(js, targetURL, sURL, cc)...)
 		}
 	}
 
@@ -897,6 +955,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				spaConfig := &fetcher.SPAConfig{
 					WaitTime:   time.Duration(waitTime) * time.Second,
 					ScrollPage: true,
+					Compliance: cc,
 				}
 				if auth != nil {
 					spaConfig.AuthCookies = auth.Cookies
@@ -921,7 +980,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
-					findings = append(findings, scanner.ScanJS(js)...)
+					findings = append(findings, scanExternalScript(js, u, sURL, cc)...)
 				}
 				for _, sURL := range spaResult.DynamicScripts {
 					if err := cc.CheckURL(sURL, "script"); err != nil {
@@ -932,7 +991,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
-					findings = append(findings, scanner.ScanJS(js)...)
+					findings = append(findings, scanExternalScript(js, u, sURL, cc)...)
 				}
 			} else {
 				// Standard mode
@@ -954,7 +1013,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 						cc.LogError(sURL, "script", err.Error())
 						continue
 					}
-					findings = append(findings, scanner.ScanJS(js)...)
+					findings = append(findings, scanExternalScript(js, u, sURL, cc)...)
 				}
 			}
 
@@ -984,8 +1043,9 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 			if doVerify {
 				// Build payload config for this URL (thread-safe)
 				var payloadCfg *verifier.PayloadConfig
-				if len(customPayloads) > 0 && mergePayloads {
+				if len(customPayloads) > 0 {
 					payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
+					payloadCfg.CustomOnly = !mergePayloads
 				}
 
 				// Parameter discovery for this URL
@@ -1016,6 +1076,8 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				for _, r := range results {
 					if r.Triggered {
 						fmt.Printf("  [!] Confirmed: %s (%s)\n", r.Source, r.Detail)
+					} else if r.Error {
+						fmt.Printf("  [!] Verification failed: %s (%s)\n", r.Source, r.Detail)
 					}
 				}
 			}
@@ -1027,6 +1089,8 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 				for _, r := range results {
 					if r.Triggered {
 						fmt.Printf("  [!] Stored XSS: %s\n", r.Detail)
+					} else if r.Error {
+						fmt.Printf("  [!] Stored verification failed: %s\n", r.Detail)
 					}
 				}
 				verifier.PrintCleanupReminder(submitted, safetyMode)
@@ -1047,12 +1111,18 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 	fmt.Printf("Batch scan complete: %d URLs scanned\n", len(urls))
 	fmt.Printf("Static findings: %d\n", len(allFindings))
 	confirmed := 0
+	verificationErrors := 0
 	for _, r := range allVerifyResults {
 		if r.Triggered {
 			confirmed++
+		} else if r.Error {
+			verificationErrors++
 		}
 	}
 	fmt.Printf("Confirmed XSS: %d\n", confirmed)
+	if verificationErrors > 0 {
+		fmt.Printf("Dynamic verification errors: %d (results are incomplete)\n", verificationErrors)
+	}
 
 	// Save results
 	if output != "" {

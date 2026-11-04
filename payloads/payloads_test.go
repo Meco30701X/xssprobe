@@ -131,8 +131,8 @@ func TestLoadPayloadsFromStrings(t *testing.T) {
 	values := []string{
 		"<script>alert(1)</script>",
 		"<img src=x onerror=alert(1)>",
-		"",  // Should be skipped
-		"   ",  // Should be skipped
+		"",    // Should be skipped
+		"   ", // Should be skipped
 	}
 
 	payloads := LoadPayloadsFromStrings(values)

@@ -12,10 +12,14 @@ func TestValidateScope(t *testing.T) {
 	}{
 		{"https://example.com", "example.com", false},
 		{"https://example.com/path", "example.com", false},
-		{"https://sub.example.com", "example.com", false},  // Subdomain match
-		{"https://other.com", "example.com", true},          // Different domain
-		{"https://example.com", "", false},                  // No scope restriction
-		{"https://example.com:8080", "example.com", false},  // With port
+		{"https://sub.example.com", "example.com", false},                                   // Subdomain match
+		{"https://other.com", "example.com", true},                                          // Different domain
+		{"https://example.com", "", false},                                                  // No scope restriction
+		{"https://example.com:8080", "example.com", false},                                  // With port
+		{"https://code.jquery.com/jquery.js", "aiwadongdemumu.com, code.jquery.com", false}, // Explicit dependency
+		{"https://static.example.com", "other.com, example.com", false},                     // Listed subdomain
+		{"https://evilcode.jquery.com", "aiwadongdemumu.com, code.jquery.com", true},        // No suffix confusion
+		{"https://other.com", "aiwadongdemumu.com, code.jquery.com", true},
 	}
 
 	for _, tt := range tests {
@@ -75,13 +79,13 @@ func TestRobotsRules_IsAllowed(t *testing.T) {
 	}
 
 	tests := []struct {
-		path      string
-		allowed   bool
+		path    string
+		allowed bool
 	}{
 		{"/public", true},
 		{"/admin", false},
 		{"/admin/secret", false},
-		{"/admin/public", true},  // Allow overrides disallow
+		{"/admin/public", true}, // Allow overrides disallow
 		{"/private/page", false},
 	}
 
@@ -107,7 +111,7 @@ func TestRobotsRules_NoExists(t *testing.T) {
 func TestNewAuditLogger(t *testing.T) {
 	// Test with nil logger
 	var logger *AuditLogger
-	logger.Log(AuditEntry{URL: "test"})  // Should not panic
+	logger.Log(AuditEntry{URL: "test"}) // Should not panic
 }
 
 func TestConfirmLegalUsage(t *testing.T) {

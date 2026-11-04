@@ -33,7 +33,7 @@ func NewRobotsCache() *RobotsCache {
 }
 
 // GetRobots fetches and caches robots.txt rules for a URL's domain
-func (rc *RobotsCache) GetRobots(rawURL string) (*RobotsRules, error) {
+func (rc *RobotsCache) GetRobots(rawURL string, limiters ...*RateLimiter) (*RobotsRules, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, err
@@ -49,7 +49,11 @@ func (rc *RobotsCache) GetRobots(rawURL string) (*RobotsRules, error) {
 	rc.mu.Unlock()
 
 	// Fetch robots.txt
-	rules, err := fetchRobotsFile(domain)
+	var limiter *RateLimiter
+	if len(limiters) > 0 {
+		limiter = limiters[0]
+	}
+	rules, err := fetchRobotsFile(domain, limiter)
 	if err != nil {
 		// If we can't fetch robots.txt, assume everything is allowed
 		rules = &RobotsRules{Exists: false}
@@ -62,10 +66,16 @@ func (rc *RobotsCache) GetRobots(rawURL string) (*RobotsRules, error) {
 	return rules, nil
 }
 
-func fetchRobotsFile(baseURL string) (*RobotsRules, error) {
+func fetchRobotsFile(baseURL string, limiter *RateLimiter) (*RobotsRules, error) {
 	robotsURL := strings.TrimSuffix(baseURL, "/") + "/robots.txt"
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		// Do not allow robots.txt redirects to silently fetch a different origin.
+		return http.ErrUseLastResponse
+	}}
+	if limiter != nil {
+		limiter.Wait()
+	}
 	resp, err := client.Get(robotsURL)
 	if err != nil {
 		return nil, err
