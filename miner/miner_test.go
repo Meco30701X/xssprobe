@@ -1,8 +1,34 @@
 package miner
 
 import (
+	"strings"
 	"testing"
 )
+
+func TestMineParamsFromURL(t *testing.T) {
+	params := MineParamsFromURL("https://example.test/search?tag=a&query=seed&tag=b#section")
+	if got, want := strings.Join(ParamNames(params), ","), "query,tag"; got != want {
+		t.Fatalf("URL parameter names = %q, want %q", got, want)
+	}
+	for _, param := range params {
+		if param.Source != SourceURL {
+			t.Errorf("parameter %q source = %q, want %q", param.Name, param.Source, SourceURL)
+		}
+		if param.ExampleValue != "" {
+			t.Errorf("parameter %q unexpectedly retained its value", param.Name)
+		}
+	}
+}
+
+func TestMergeDiscoveredParamsDeduplicatesByName(t *testing.T) {
+	got := MergeDiscoveredParams(
+		[]DiscoveredParam{{Name: "query", Source: SourceForm}, {Name: "q", Source: SourceURL}},
+		[]DiscoveredParam{{Name: "query", Source: SourceURL}, {Name: "", Source: SourceManual}},
+	)
+	if len(got) != 2 || got[0].Name != "query" || got[0].Source != SourceForm || got[1].Name != "q" {
+		t.Fatalf("merged params = %+v", got)
+	}
+}
 
 func TestMineParamsFromHTML_FormInputs(t *testing.T) {
 	html := `

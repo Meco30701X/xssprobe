@@ -13,11 +13,24 @@ domxss.exe
 *.out
 vendor/
 
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.pfx
+.netrc
+credentials.json
+secrets.json
+**/.aws/credentials
+
 # IDE
 .idea/
 .vscode/
 *.swp
 *.swo
+.playwright-mcp/
 
 # Claude AI
 .claude/

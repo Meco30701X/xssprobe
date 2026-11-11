@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -11,11 +12,11 @@ import (
 type ParamSource string
 
 const (
-	SourceForm    ParamSource = "form"
-	SourceURL     ParamSource = "url"
-	SourceJS      ParamSource = "js"
+	SourceForm     ParamSource = "form"
+	SourceURL      ParamSource = "url"
+	SourceJS       ParamSource = "js"
 	SourceWordlist ParamSource = "wordlist"
-	SourceManual  ParamSource = "manual"
+	SourceManual   ParamSource = "manual"
 )
 
 // DiscoveredParam represents a discovered parameter
@@ -90,8 +91,8 @@ func MineParamsFromHTML(html string) []DiscoveredParam {
 				if !seen[p] {
 					seen[p] = true
 					params = append(params, DiscoveredParam{
-						Name:      p,
-						Source:    SourceForm,
+						Name:       p,
+						Source:     SourceForm,
 						FormAction: action,
 					})
 				}
@@ -130,6 +131,50 @@ func MineParamsFromHTML(html string) []DiscoveredParam {
 	}
 
 	return params
+}
+
+// MineParamsFromURL extracts query parameter names already present in the
+// operator-supplied target URL. Their values are deliberately not copied into
+// discovery metadata or printed by the CLI.
+func MineParamsFromURL(rawURL string) []DiscoveredParam {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil
+	}
+	values := parsed.Query()
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	params := make([]DiscoveredParam, 0, len(keys))
+	for _, key := range keys {
+		params = append(params, DiscoveredParam{Name: key, Source: SourceURL})
+	}
+	return params
+}
+
+// MergeDiscoveredParams combines parameter sources while keeping the first
+// occurrence of each name and its provenance.
+func MergeDiscoveredParams(groups ...[]DiscoveredParam) []DiscoveredParam {
+	var merged []DiscoveredParam
+	seen := make(map[string]bool)
+	for _, group := range groups {
+		for _, param := range group {
+			name := strings.TrimSpace(param.Name)
+			if name == "" || seen[name] {
+				continue
+			}
+			param.Name = name
+			seen[name] = true
+			merged = append(merged, param)
+		}
+	}
+	return merged
 }
 
 // extractURLParams extracts parameter names from a URL string

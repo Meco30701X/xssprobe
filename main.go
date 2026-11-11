@@ -89,7 +89,8 @@ func main() {
 	output := flag.String("o", "", "Output results to JSON file")
 	htmlOutput := flag.String("html", "", "HTML report output path")
 	verify := &verifyMode{}
-	flag.Var(verify, "verify", "Dynamic verification: -verify (high-rate), -verify all (all payloads), -verify N (stop after N)")
+	flag.Var(verify, "verify", "Dynamic verification: -verify (quick), -verify=all (all payloads), -verify=N (stop after N confirmations)")
+	pathVerify := flag.Bool("path", false, "Also test the final URL path segment for reflected XSS; requires -verify")
 	stored := flag.Bool("stored", false, "Test for stored DOM XSS")
 	spa := flag.Bool("spa", false, "SPA mode: render page with headless browser")
 	crawl := flag.Bool("crawl", false, "Auto-crawl site and scan all discovered pages")
@@ -101,7 +102,7 @@ func main() {
 	threads := flag.Int("threads", 5, "Number of concurrent threads for batch scanning")
 	waitTime := flag.Int("wait", 5, "Wait time in seconds for SPA rendering")
 	dryRun := flag.Bool("dry-run", false, "Dry-run: detect inputs but don't submit (safest)")
-	safePayloads := flag.Bool("safe", false, "Use only harmless canary payloads")
+	safePayloads := flag.Bool("safe", false, "Use only harmless canaries for -stored submissions")
 	confirm := flag.Bool("confirm", false, "Ask for confirmation before each submission")
 	// Combined analysis flag
 	analyze := flag.Bool("analyze", false, "Combined static+dynamic analysis (lower false positives)")
@@ -139,6 +140,10 @@ func main() {
 	if *showVersion {
 		fmt.Printf("xssprobe %s\n", version)
 		os.Exit(0)
+	}
+	if *pathVerify && !verify.enabled {
+		fmt.Fprintln(os.Stderr, "[!] Error: -path requires -verify.")
+		os.Exit(2)
 	}
 
 	// Legal confirmation
@@ -383,13 +388,17 @@ func main() {
 	// Single URL or batch
 	if len(urls) == 1 {
 		if *analyze {
-			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *maxVerify, *skipFiltered, complianceCtx, *disableCORS, *proxy)
+			if *pathVerify {
+				fmt.Fprintln(os.Stderr, "[!] Error: -path is currently supported with -verify, not -analyze.")
+				os.Exit(2)
+			}
+			scanURLCombined(urls[0], auth, *waf, *spa, *waitTime, *output, *htmlOutput, *maxVerify, *skipFiltered, customPayloads, *payloadMerge, *payloadFirst, complianceCtx, *disableCORS, *proxy)
 		} else {
-			scanURL(urls[0], auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, safetyMode, complianceCtx,
+			scanURL(urls[0], auth, *waf, verify.enabled, verify.all, verify.count, *pathVerify, *stored, *spa, *waitTime, *output, *htmlOutput, safetyMode, complianceCtx,
 				*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *disableCORS, *proxy)
 		}
 	} else if len(urls) > 1 {
-		scanBatch(urls, auth, *waf, verify.enabled, verify.all, verify.count, *stored, *spa, *waitTime, *output, *htmlOutput, *threads, safetyMode, complianceCtx,
+		scanBatch(urls, auth, *waf, verify.enabled, verify.all, verify.count, *pathVerify, *stored, *spa, *waitTime, *output, *htmlOutput, *threads, safetyMode, complianceCtx,
 			*mineParams, *useWordlist, manualParams, *autoWAF, customPayloads, *payloadMerge, *payloadFirst, *disableCORS, *proxy)
 	}
 }
@@ -401,6 +410,7 @@ func printUsage() {
 	fmt.Println("  xssprobe -u https://example.com                          # Static analysis")
 	fmt.Println("  xssprobe -u URL -analyze                                  # Combined analysis (recommended)")
 	fmt.Println("  xssprobe -u URL -verify                                   # Reflected DOM XSS")
+	fmt.Println("  xssprobe -u URL -verify -path                             # Also test final path segment")
 	fmt.Println("  xssprobe -u URL -stored                                   # Stored XSS (dry-run, no submit)")
 	fmt.Println("  xssprobe -u URL -stored -dry-run=false -safe -confirm     # Stored XSS (submit safe payloads)")
 	fmt.Println("  xssprobe -u URL -spa                                      # SPA rendering mode")
@@ -418,6 +428,7 @@ func printUsage() {
 	fmt.Println("  -f          Local JS file")
 	fmt.Println("  -o          Output JSON file")
 	fmt.Println("  -verify     Reflected DOM XSS verification")
+	fmt.Println("  -path       Also test the final URL path segment (requires -verify)")
 	fmt.Println("  -stored     Stored DOM XSS detection")
 	fmt.Println("  -spa        SPA mode: render page with headless browser")
 	fmt.Println("  -crawl      Auto-crawl site and scan all discovered pages")
@@ -433,7 +444,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Safety Flags (for stored XSS):")
 	fmt.Println("  -dry-run    Only detect inputs, don't submit any data (default for -stored)")
-	fmt.Println("  -safe       Use only harmless canary payloads")
+	fmt.Println("  -safe       Use harmless canaries for -stored submissions only")
 	fmt.Println("  -confirm    Ask for confirmation before each submission")
 	fmt.Println()
 	fmt.Println("Browser Flags:")
@@ -562,10 +573,11 @@ func scanLocalFile(filename, output string) {
 	}
 }
 
-func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doPath, doStored, doSPA bool, waitTime int, output string, htmlOutput string, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
 	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool, disableCORS bool, proxy string) {
 	var allFindings []scanner.Finding
 	var allVerifyResults []verifier.VerifyResult
+	var payloadCfg *verifier.PayloadConfig
 	var pageHTML string // store HTML for parameter mining
 
 	// Compliance check for target URL
@@ -705,6 +717,9 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 		fmt.Println("\n[*] Parameter discovery...")
 		discoveredParams = miner.MineParamsFromHTML(pageHTML)
 	}
+	// The current target URL is itself an explicit input source, even when the
+	// page does not repeat its query parameters in forms, links, or JavaScript.
+	discoveredParams = miner.MergeDiscoveredParams(discoveredParams, miner.MineParamsFromURL(targetURL))
 
 	// Merge with manual params
 	if len(manualParams) > 0 {
@@ -731,7 +746,6 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 
 		// Build payload config (thread-safe, no globals)
 		effectiveWAF := wafType
-		var payloadCfg *verifier.PayloadConfig
 		if len(customPayloads) > 0 {
 			fmt.Printf("[*] Using %d custom payloads\n", len(customPayloads))
 			payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
@@ -792,6 +806,12 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 			verifier.PrintResults(results)
 		}
 	}
+	if doPath {
+		fmt.Println("\n[*] Final path segment XSS verification...")
+		results := verifier.VerifyPathSegment(targetURL, auth, wafType, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
+		allVerifyResults = append(allVerifyResults, results...)
+		verifier.PrintResults(results)
+	}
 
 	// Stored DOM XSS
 	if doStored {
@@ -822,7 +842,7 @@ func scanURL(targetURL string, auth *verifier.AuthConfig, wafType string, doVeri
 	}
 }
 
-func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, maxVerify int, skipFiltered bool, cc *compliance.ComplianceContext, disableCORS bool, proxy string) {
+func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, doSPA bool, waitTime int, output string, htmlOutput string, maxVerify int, skipFiltered bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool, cc *compliance.ComplianceContext, disableCORS bool, proxy string) {
 	// Compliance check
 	if err := cc.CheckURL(targetURL, "analyze"); err != nil {
 		fmt.Printf("[!] Compliance blocked: %v\n", err)
@@ -900,27 +920,57 @@ func scanURLCombined(targetURL string, auth *verifier.AuthConfig, waf string, do
 	}
 
 	// Phase 2: Combined Analysis with Dynamic Verification
+	var payloadCfg *verifier.PayloadConfig
+	if len(customPayloads) > 0 {
+		payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
+		payloadCfg.CustomOnly = !mergePayloads
+	}
 	config := &analyzer.AnalysisConfig{
-		DoVerify:     true,
-		WAF:          waf,
-		MaxVerify:    maxVerify,
-		SkipFiltered: skipFiltered,
-		DisableCORS:  disableCORS,
-		Proxy:        proxy,
-		Limiter:      cc.Limiter,
+		DoVerify:      true,
+		WAF:           waf,
+		MaxVerify:     maxVerify,
+		SkipFiltered:  skipFiltered,
+		DisableCORS:   disableCORS,
+		Proxy:         proxy,
+		Limiter:       cc.Limiter,
+		PayloadConfig: payloadCfg,
 	}
 
 	results := analyzer.AnalyzeFindings(targetURL, allFindings, auth, config)
 	analyzer.PrintAnalysisResults(results)
+	var directResults []verifier.VerifyResult
+	urlParams := miner.ParamNames(miner.MineParamsFromURL(targetURL))
+	if len(urlParams) > 0 {
+		fmt.Printf("\n[Phase 2b] Verifying %d explicit URL parameter(s)\n", len(urlParams))
+		directResults = verifier.VerifyURLWithParams(targetURL, auth, waf, urlParams, cc.Limiter, payloadCfg, 1, false, disableCORS, proxy)
+		verifier.PrintResults(directResults)
+	}
 
-	// Save detailed report
+	var allVerifyResults []verifier.VerifyResult
+	for _, result := range results {
+		if result.VerifyResult != nil {
+			allVerifyResults = append(allVerifyResults, *result.VerifyResult)
+		}
+	}
+	allVerifyResults = append(allVerifyResults, directResults...)
+
 	if output != "" {
-		analyzer.PrintDetailedReport(results)
-		fmt.Printf("\n[*] Results saved to %s\n", output)
+		if err := report.OutputAnalysisJSON(results, directResults, output); err != nil {
+			fmt.Fprintf(os.Stderr, "[!] JSON report error: %v\n", err)
+		} else {
+			fmt.Printf("[*] Results saved to %s\n", output)
+		}
+	}
+	if htmlOutput != "" {
+		if err := report.OutputHTML(allFindings, allVerifyResults, targetURL, htmlOutput); err != nil {
+			fmt.Fprintf(os.Stderr, "[!] HTML report error: %v\n", err)
+		} else {
+			fmt.Printf("[*] HTML report saved to %s\n", htmlOutput)
+		}
 	}
 }
 
-func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doStored, doSPA bool, waitTime int, output string, htmlOutput string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
+func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerify bool, verifyAll bool, verifyCount int, doPath, doStored, doSPA bool, waitTime int, output string, htmlOutput string, concurrency int, safetyMode *safety.SafetyMode, cc *compliance.ComplianceContext,
 	doMine, useWordlist bool, manualParams []string, autoWAF bool, customPayloads []payloads.Payload, mergePayloads, customFirst bool, disableCORS bool, proxy string) {
 	fmt.Printf("[*] Batch scanning %d URLs with %d threads\n", len(urls), concurrency)
 
@@ -949,6 +999,7 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 
 			var findings []scanner.Finding
 			var verifyResults []verifier.VerifyResult
+			var payloadCfg *verifier.PayloadConfig
 
 			if doSPA {
 				// SPA mode
@@ -1042,27 +1093,27 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 			// Dynamic verification
 			if doVerify {
 				// Build payload config for this URL (thread-safe)
-				var payloadCfg *verifier.PayloadConfig
 				if len(customPayloads) > 0 {
 					payloadCfg = verifier.NewPayloadConfig(customPayloads, customFirst)
 					payloadCfg.CustomOnly = !mergePayloads
 				}
 
 				// Parameter discovery for this URL
-				var urlParams []string
+				var discovered []miner.DiscoveredParam
 				if doMine && !doSPA {
 					html, err := fetcher.FetchPage(u, cc.Limiter)
 					if err == nil {
-						discovered := miner.MineParamsFromHTML(html)
-						if len(manualParams) > 0 {
-							discovered = miner.MergeParams(discovered, manualParams)
-						}
-						if useWordlist {
-							discovered = miner.AddWordlistParams(discovered, miner.GetDefaultWordlist())
-						}
-						urlParams = miner.ParamNames(discovered)
+						discovered = miner.MineParamsFromHTML(html)
 					}
 				}
+				discovered = miner.MergeDiscoveredParams(discovered, miner.MineParamsFromURL(u))
+				if len(manualParams) > 0 {
+					discovered = miner.MergeParams(discovered, manualParams)
+				}
+				if useWordlist {
+					discovered = miner.AddWordlistParams(discovered, miner.GetDefaultWordlist())
+				}
+				urlParams := miner.ParamNames(discovered)
 
 				var results []verifier.VerifyResult
 				if len(urlParams) > 0 {
@@ -1078,6 +1129,18 @@ func scanBatch(urls []string, auth *verifier.AuthConfig, wafType string, doVerif
 						fmt.Printf("  [!] Confirmed: %s (%s)\n", r.Source, r.Detail)
 					} else if r.Error {
 						fmt.Printf("  [!] Verification failed: %s (%s)\n", r.Source, r.Detail)
+					}
+				}
+			}
+			if doPath {
+				fmt.Printf("  [*] Testing final URL path segment\n")
+				pathResults := verifier.VerifyPathSegment(u, auth, effectiveWAF, cc.Limiter, payloadCfg, verifyCount, verifyAll, disableCORS, proxy)
+				verifyResults = append(verifyResults, pathResults...)
+				for _, r := range pathResults {
+					if r.Triggered {
+						fmt.Printf("  [!] Confirmed path XSS: %s\n", r.Detail)
+					} else if r.Error {
+						fmt.Printf("  [!] Path verification failed: %s\n", r.Detail)
 					}
 				}
 			}

@@ -57,3 +57,36 @@ Default safe-canary smoke checks (no custom `-payload`) confirmed automatic sele
 2. Improve contextual filter modeling so case-sensitive or partial regex replacements do not look like strong sanitizers.
 3. Keep `unknown` sink-only heuristics separate from actionable vulnerability findings, and retain the current confidence caveat in reports.
 4. Preserve the safety exclusions above. Do not add stored submissions, cookie access/exfiltration, or email/account mutations to automated regression runs.
+
+## 2026-11-11 public-repository review and broader lab validation
+
+### Secret exposure review
+
+- The repository is public. A local pattern scan covered the 81 commits reachable from the checked-out refs; a second scan covered current source/docs. Neither found private-key markers, common cloud/GitHub/Slack/npm tokens, JWT-shaped values, credential URLs, or credential-like filenames.
+- GitHub's Secret Scanning API returned `Secret scanning is disabled on this repository`; server-side historical alerts and push protection therefore remain unverified and should be enabled in repository settings.
+- Current GitHub refs were `main` and tags `v1.0.0` through `v1.0.3`. The local checkout's commit SHA differed from remote `main` due to the earlier API-created signed commit, but the file tree matched. Changes made in this follow-on review are local and have not been pushed.
+
+### Findings and changes made locally
+
+- Audit logs and generated JSON/HTML reports were written with mode `0644`, and audit entries retained URL userinfo, sensitive query values, and fragments. Audit URL/reason sanitization and private file writing are now implemented; POSIX permission tests cover `0600`. On Windows, Go's mode bits do not replace NTFS ACLs, so output files still inherit the parent directory ACL.
+- The static XSS scanner treated message/network/prototype operations as execution sinks. `postMessage`, `WebSocket.send`, Ajax/fetch sends, cookie assignment, and prototype-mutation calls were removed from XSS sinks; `event.data → innerHTML` remains detectable. XHR response data is retained as a medium-confidence source.
+- `-u URL?name=value` parameters were omitted when they did not appear in HTML/JS. URL query names are now discovered and tested first. Dynamic URL-path testing was added as explicit `-verify -path`, which appends payloads only to the final path segment.
+- `-analyze` now tests explicit URL query parameters, honors custom payload configuration, writes JSON/HTML outputs, and does not promote sink-only or unsupported dynamic replay results to “possible XSS”.
+- CI/Release Actions are pinned to resolved commit SHAs; workflow token permissions are read-only for CI/build jobs, with `contents: write` limited to the release job. `.gitignore` now covers common credential files and Playwright artifacts.
+- `-safe` is intentionally only for `-stored`; reflected verification uses a custom marker with `-payload-merge=false` for canary-only runs. CLI/README text now says this explicitly.
+
+### Fresh validation, kept separate from the hand-authored corpus
+
+- Google XSS Game: safe marker confirmed query-based reflected XSS in the search frame. The same safe payload on its home page did not execute. The second level is stored XSS and was not submitted. A marker in level 3's image path did not execute and was not counted as a positive.
+- Google Gruyere's official reflected-XSS task: a safe marker in the invalid-route path executed. Query-only XSSProbe testing did not detect it; the new `-path` mode confirmed it. The route's `robots.txt` rule was bypassed only for this explicitly authorized directed task, at `2 req/s`, with host scope and no crawler.
+- PortSwigger's reflected-XSS Academy lab required login; no account was created. Acunetix's public demo host refused browser connections. Neither result is counted.
+- Current manual lab matrix: two confirmed positives across two sites (query and path). The query case was confirmed after URL-parameter discovery was fixed; the path case was confirmed with the new opt-in `-path` mode. One negative control did not execute. This sample is too small to claim a general 85% success rate.
+- The fixed synthetic scanner corpus now reports 98% overall (24 TP, 25 TN, 0 FP, 1 FN) and 100% on its 10-example holdout. It remains a regression set, not field accuracy.
+- Latest local checks: `go test ./...`, `go vet ./...`, `go mod tidy -diff`, and `git diff --check` passed.
+
+### Next work
+
+1. Enable GitHub Secret Scanning and push protection; no secret candidates were found by local scans, but server-side scanning is currently disabled.
+2. Expand the independent lab matrix with more query, DOM/hash, path, encoding, and negative-control cases from distinct applications; keep stored writes excluded.
+3. Improve static dataflow across helper functions and separate scripts. The current line-oriented analyzer still has incomplete context modeling; a medium-confidence XHR-response-to-`eval` lead remains incomplete when replay is unsupported.
+4. Add platform-specific Windows ACL handling if owner-only report/audit permissions must be guaranteed on shared Windows folders.

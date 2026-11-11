@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -16,6 +17,25 @@ func TestGetTestPayloads_CustomOnly(t *testing.T) {
 	got := getTestPayloads("generic", config, true)
 	if !reflect.DeepEqual(got, []string{custom[0].Value}) {
 		t.Fatalf("custom-only payloads = %#v, want only %#v", got, custom)
+	}
+}
+
+func TestIncludeTargetURLParamsPrioritizesExistingQueryInputs(t *testing.T) {
+	got := includeTargetURLParams("https://example.test/search?tag=b&query=seed&tag=a", []string{"q", "query"})
+	want := []string{"query", "tag", "q"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("URL parameter order = %#v, want %#v", got, want)
+	}
+}
+
+func TestIncludeTargetURLParamContextsCopiesAndAddsQueryInputs(t *testing.T) {
+	original := map[string]string{"search": "html"}
+	got := includeTargetURLParamContexts("https://example.test/?query=seed", original)
+	if got["search"] != "html" || got["query"] != "" {
+		t.Fatalf("merged contexts = %#v", got)
+	}
+	if len(original) != 1 {
+		t.Fatalf("input context map was mutated: %#v", original)
 	}
 }
 
@@ -125,6 +145,23 @@ func TestWithURLFragmentUsesFragmentEscapingAndReplacesExistingHash(t *testing.T
 	}
 	if strings.Contains(got, "+") {
 		t.Fatalf("fragment URL must not use query-style plus for spaces: %q", got)
+	}
+}
+
+func TestWithPathSuffixPreservesQueryAndFragment(t *testing.T) {
+	got, err := withPathSuffix("https://example.test/lab/invalid?q=seed#keep", `<img src=x onerror="window.xssTriggered=true">`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Path != `/lab/invalid<img src=x onerror="window.xssTriggered=true">` {
+		t.Fatalf("mutated path = %q", parsed.Path)
+	}
+	if parsed.Query().Get("q") != "seed" || parsed.Fragment != "keep" {
+		t.Fatalf("query or fragment was changed: %s", got)
 	}
 }
 

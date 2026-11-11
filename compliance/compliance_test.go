@@ -1,6 +1,9 @@
 package compliance
 
 import (
+	"os"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -112,6 +115,53 @@ func TestNewAuditLogger(t *testing.T) {
 	// Test with nil logger
 	var logger *AuditLogger
 	logger.Log(AuditEntry{URL: "test"}) // Should not panic
+}
+
+func TestAuditURLRedactsCredentialsAndSensitiveQueryValues(t *testing.T) {
+	input := "https://" + "alice" + ":" + "pw" + "@example.test/path?search=hello&access_token=stub-token&api_key=stub-key#fragment"
+	got := sanitizeAuditURL(input)
+	for _, forbidden := range []string{"alice", "pw", "stub-token", "stub-key", "fragment"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("sanitized audit URL still contains %q: %s", forbidden, got)
+		}
+	}
+	for _, required := range []string{"https://example.test/path", "search=hello", "access_token=%5BREDACTED%5D", "api_key=%5BREDACTED%5D"} {
+		if !strings.Contains(got, required) {
+			t.Errorf("sanitized audit URL missing %q: %s", required, got)
+		}
+	}
+}
+
+func TestAuditReasonRedactsEmbeddedURLs(t *testing.T) {
+	urlWithCredentials := "https://" + "user" + ":" + "pw" + "@example.test/?token=stub-token"
+	got := sanitizeAuditText("request failed for " + urlWithCredentials + ": timeout")
+	for _, forbidden := range []string{"user", "pw", "stub-token"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("sanitized audit reason still contains %q: %s", forbidden, got)
+		}
+	}
+}
+
+func TestAuditLoggerRestrictsExistingFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX file permission bits")
+	}
+	path := t.TempDir() + "/audit.jsonl"
+	if err := os.WriteFile(path, []byte("{}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	logger, err := NewAuditLogger(path, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logger.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Errorf("audit file permissions = %04o, want 0600", got)
+	}
 }
 
 func TestConfirmLegalUsage(t *testing.T) {

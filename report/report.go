@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 
+	"github.com/Meco30701X/xssprobe/analyzer"
 	"github.com/Meco30701X/xssprobe/scanner"
 	"github.com/Meco30701X/xssprobe/verifier"
 )
@@ -339,7 +339,7 @@ func OutputJSON(findings []scanner.Finding, filename string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	return writePrivateFile(filename, data)
 }
 
 // OutputVerifiedJSON writes both static findings and verification results to JSON
@@ -361,5 +361,22 @@ func OutputVerifiedJSON(findings []scanner.Finding, results []verifier.VerifyRes
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filename, data, 0644)
+	return writePrivateFile(filename, data)
+}
+
+// OutputAnalysisJSON writes the combined analyzer results and any direct URL
+// parameter checks performed by -analyze.
+func OutputAnalysisJSON(results []analyzer.AnalysisResult, direct []verifier.VerifyResult, filename string) error {
+	type output struct {
+		AnalysisResults           []analyzer.AnalysisResult `json:"analysis_results"`
+		DirectDynamicVerification []verifier.VerifyResult   `json:"direct_dynamic_verification,omitempty"`
+	}
+	data, err := json.MarshalIndent(output{
+		AnalysisResults:           results,
+		DirectDynamicVerification: direct,
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writePrivateFile(filename, data)
 }

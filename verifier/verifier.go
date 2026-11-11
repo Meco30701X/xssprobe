@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -419,6 +420,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 	if len(params) == 0 {
 		params = []string{"q", "search", "id", "page", "input", "name", "s"}
 	}
+	params = includeTargetURLParams(targetURL, params)
 
 	hashIndex := 0
 	if len(hashPayloads) > 0 {
@@ -463,6 +465,7 @@ func VerifyURLWithParams(targetURL string, auth *AuthConfig, waf string, params 
 // VerifyURLWithContext tests a URL with context-aware payload selection
 func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramContexts map[string]string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool, disableCORS bool, proxy string) []VerifyResult {
 	var results []VerifyResult
+	paramContexts = includeTargetURLParamContexts(targetURL, paramContexts)
 
 	// Test hash fragment with default payloads
 	testPayloads := getTestPayloads(waf, config, testAll)
@@ -478,8 +481,14 @@ func VerifyURLWithContext(targetURL string, auth *AuthConfig, waf string, paramC
 		}
 	}
 
-	// Test each parameter with context-aware payloads
-	for param, ctxType := range paramContexts {
+	// Test parameters deterministically so results do not vary between runs.
+	paramNames := make([]string, 0, len(paramContexts))
+	for param := range paramContexts {
+		paramNames = append(paramNames, param)
+	}
+	sort.Strings(paramNames)
+	for _, param := range paramNames {
+		ctxType := paramContexts[param]
 		// Get context-specific payloads
 		contextPayloads := getTestPayloadsByContext(ctxType, waf, config)
 		if len(contextPayloads) == 0 {
@@ -614,6 +623,98 @@ func withURLFragment(rawURL, fragment string) string {
 	parsed.Fragment = fragment
 	parsed.RawFragment = ""
 	return parsed.String()
+}
+
+// withPathSuffix appends a test payload to the last path segment while keeping
+// the URL's existing query and fragment. Path testing is opt-in because it can
+// change route matching and may exercise different application handlers.
+func withPathSuffix(rawURL, payload string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
+		return "", fmt.Errorf("invalid path-test URL")
+	}
+	escapedPath := parsed.EscapedPath()
+	lastSlash := strings.LastIndex(escapedPath, "/")
+	prefix := escapedPath[:lastSlash+1]
+	lastEscaped := escapedPath[lastSlash+1:]
+	prefixPath, err := url.PathUnescape(prefix)
+	if err != nil {
+		return "", fmt.Errorf("invalid escaped path prefix")
+	}
+	lastSegment, err := url.PathUnescape(lastEscaped)
+	if err != nil {
+		return "", fmt.Errorf("invalid escaped final path segment")
+	}
+	parsed.Path = prefixPath + lastSegment + payload
+	parsed.RawPath = prefix + url.PathEscape(lastSegment+payload)
+	return parsed.String(), nil
+}
+
+// VerifyPathSegment tests the last URL path segment for reflected execution.
+// It is opt-in at the CLI because changing a path can exercise a different
+// handler; it never submits form or stored data.
+func VerifyPathSegment(targetURL string, auth *AuthConfig, waf string, limiter *compliance.RateLimiter, config *PayloadConfig, maxConfirm int, testAll bool, disableCORS bool, proxy string) []VerifyResult {
+	results := make([]VerifyResult, 0)
+	for _, payload := range getTestPayloads(waf, config, testAll) {
+		result := testPathSuffix(targetURL, payload, auth, limiter, disableCORS, proxy)
+		results = append(results, result)
+		if result.Error || (maxConfirm > 0 && countConfirmed(results) >= maxConfirm) {
+			return results
+		}
+	}
+	return results
+}
+
+func testPathSuffix(baseURL, payload string, auth *AuthConfig, limiter *compliance.RateLimiter, disableCORS bool, proxy string) VerifyResult {
+	result := VerifyResult{Source: "path-segment", Payload: payload, CORSDisabled: disableCORS}
+	testURL, err := withPathSuffix(baseURL, payload)
+	if err != nil {
+		result.Error = true
+		result.Detail = err.Error()
+		return result
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	taskCtx, taskCancel, setupErr := newChromeContext(ctx, testURL, auth, limiter, disableCORS, proxy)
+	if setupErr != nil {
+		result.Error = true
+		result.Detail = "browser policy setup failed: " + setupErr.Error()
+		return result
+	}
+	defer taskCancel()
+
+	chromedp.ListenTarget(taskCtx, func(ev interface{}) {
+		if _, ok := ev.(*page.EventJavascriptDialogOpening); ok {
+			result.Triggered = true
+			result.Evidence = "execution"
+			result.Detail = "alert() dialog triggered"
+		}
+	})
+
+	var jsTriggered bool
+	err = chromedp.Run(taskCtx,
+		chromedp.Navigate(testURL),
+		chromedp.Sleep(500*time.Millisecond),
+		chromedp.Evaluate(`window.xssTriggered === true`, &jsTriggered),
+	)
+	if err != nil {
+		if result.Triggered {
+			return result
+		}
+		result.Error = true
+		result.Detail = "navigation error: " + err.Error()
+		return result
+	}
+	if jsTriggered {
+		result.Triggered = true
+		result.Evidence = "execution"
+		result.Detail = "JavaScript execution confirmed (window.xssTriggered=true)"
+	} else {
+		result.Detail = "No JavaScript execution observed in the modified path"
+		result.Evidence = "no_execution"
+	}
+	return result
 }
 
 func escapedFragment(fragment string) string {
@@ -1236,6 +1337,7 @@ func TestSearchOnlyWithLimiter(targetURL string, auth *AuthConfig, waf string, c
 
 	payload := payloads[0]
 	params := []string{"q", "search", "id", "page", "input", "name", "s"}
+	params = includeTargetURLParams(targetURL, params)
 
 	for _, param := range params {
 		r := testSearchParam(targetURL, param, payload, auth, limiter, disableCORS, proxy)
@@ -1248,6 +1350,62 @@ func TestSearchOnlyWithLimiter(targetURL string, auth *AuthConfig, waf string, c
 	}
 
 	return VerifyResult{Source: "search", Payload: payload, Detail: "not triggered"}
+}
+
+func includeTargetURLParams(targetURL string, params []string) []string {
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return params
+	}
+	query := parsed.Query()
+	keys := make([]string, 0, len(query))
+	for key := range query {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+
+	result := make([]string, 0, len(keys)+len(params))
+	seen := make(map[string]bool, len(keys)+len(params))
+	for _, key := range keys {
+		if !seen[key] {
+			result = append(result, key)
+			seen[key] = true
+		}
+	}
+	for _, param := range params {
+		param = strings.TrimSpace(param)
+		if param != "" && !seen[param] {
+			result = append(result, param)
+			seen[param] = true
+		}
+	}
+	return result
+}
+
+func includeTargetURLParamContexts(targetURL string, contexts map[string]string) map[string]string {
+	if contexts == nil {
+		contexts = make(map[string]string)
+	} else {
+		cloned := make(map[string]string, len(contexts))
+		for key, value := range contexts {
+			cloned[key] = value
+		}
+		contexts = cloned
+	}
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return contexts
+	}
+	for key := range parsed.Query() {
+		if strings.TrimSpace(key) != "" {
+			if _, exists := contexts[key]; !exists {
+				contexts[key] = ""
+			}
+		}
+	}
+	return contexts
 }
 
 // VerifyPostMessage checks whether a same-window message can execute a benign marker assignment.

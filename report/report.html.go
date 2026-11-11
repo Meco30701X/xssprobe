@@ -3,7 +3,6 @@ package report
 import (
 	"fmt"
 	"html"
-	"os"
 	"strings"
 	"time"
 
@@ -56,7 +55,7 @@ func OutputHTML(findings []scanner.Finding, results []verifier.VerifyResult, tar
 	htmlContent := generateHTML(data, corsDisabled)
 
 	// Write to file
-	return os.WriteFile(filename, []byte(htmlContent), 0644)
+	return writePrivateFile(filename, []byte(htmlContent))
 }
 
 func calculateSummary(findings []scanner.Finding, results []verifier.VerifyResult) HTMLSummary {

@@ -21,14 +21,15 @@ type AnalysisResult struct {
 
 // AnalysisConfig configures the combined analysis
 type AnalysisConfig struct {
-	DoVerify     bool                    // Perform dynamic verification
-	WAF          string                  // WAF type for payload selection
-	MaxVerify    int                     // Max findings to verify (0 = all)
-	OnlyHigh     bool                    // Only verify high severity findings
-	SkipFiltered bool                    // Skip findings with detected filtering
-	DisableCORS  bool                    // Disable browser same-origin policy
-	Proxy        string                  // HTTP proxy URL
-	Limiter      *compliance.RateLimiter // Rate limiter for verification requests
+	DoVerify      bool                    // Perform dynamic verification
+	WAF           string                  // WAF type for payload selection
+	MaxVerify     int                     // Max findings to verify (0 = all)
+	OnlyHigh      bool                    // Only verify high severity findings
+	SkipFiltered  bool                    // Skip findings with detected filtering
+	DisableCORS   bool                    // Disable browser same-origin policy
+	Proxy         string                  // HTTP proxy URL
+	Limiter       *compliance.RateLimiter // Rate limiter for verification requests
+	PayloadConfig *verifier.PayloadConfig // Optional custom payload configuration
 }
 
 // DefaultAnalysisConfig returns default analysis configuration
@@ -100,6 +101,15 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 
 		verifyCount := 0
 		for i := range results {
+			// A sink-only heuristic has no established attacker-controlled input
+			// flow. Replaying unrelated parameters cannot confirm that finding and
+			// must not promote it to a possible XSS result.
+			if results[i].Finding.Source == "unknown" {
+				results[i].Confidence = "low"
+				results[i].Recommendation = "Manual review lead only: no controllable source-to-sink flow was established"
+				continue
+			}
+
 			// Check max verify limit
 			if config.MaxVerify > 0 && verifyCount >= config.MaxVerify {
 				fmt.Printf("\n⚠️  Reached max verification limit (%d)\n", config.MaxVerify)
@@ -117,7 +127,7 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 				results[i].Finding.Source, results[i].Finding.Sink,
 				results[i].Finding.Line)
 
-			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF, config.DisableCORS, config.Proxy, config.Limiter)
+			verifyResult := verifyFinding(targetURL, results[i].Finding, auth, config.WAF, config.DisableCORS, config.Proxy, config.Limiter, config.PayloadConfig)
 			results[i].Verified = true
 			results[i].VerifyResult = &verifyResult
 			results[i].Confirmed = verifyResult.Triggered
@@ -126,6 +136,10 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 				results[i].Confidence = "confirmed"
 				results[i].Recommendation = "🔴 CONFIRMED VULNERABILITY: " + verifyResult.Detail
 				fmt.Printf("        ✅ CONFIRMED: %s\n", verifyResult.Detail)
+			} else if verifyResult.Error {
+				results[i].Confidence = assessInitialConfidence(results[i].Finding)
+				results[i].Recommendation = "Dynamic verification incomplete: " + verifyResult.Detail
+				fmt.Printf("        ⚠️  INCOMPLETE: %s\n", verifyResult.Detail)
 			} else {
 				results[i].Confidence = "possible"
 				results[i].Recommendation = "🟡 Possible vulnerability (not confirmed by dynamic test)"
@@ -140,19 +154,19 @@ func AnalyzeFindings(targetURL string, findings []scanner.Finding, auth *verifie
 }
 
 // verifyFinding performs dynamic verification for a specific finding
-func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string, disableCORS bool, proxy string, limiter *compliance.RateLimiter) verifier.VerifyResult {
+func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.AuthConfig, waf string, disableCORS bool, proxy string, limiter *compliance.RateLimiter, payloadConfig *verifier.PayloadConfig) verifier.VerifyResult {
 	// Determine which verification method to use based on the source
 	source := strings.ToLower(finding.Source)
 
 	// For hash-based sources
 	if strings.Contains(source, "hash") {
-		return verifier.TestHashOnlyWithLimiter(targetURL, auth, waf, nil, limiter, disableCORS, proxy)
+		return verifier.TestHashOnlyWithLimiter(targetURL, auth, waf, payloadConfig, limiter, disableCORS, proxy)
 	}
 
 	// For search/parameter-based sources
 	if strings.Contains(source, "search") || strings.Contains(source, "param") ||
 		strings.Contains(source, "query") {
-		return verifier.TestSearchOnlyWithLimiter(targetURL, auth, waf, nil, limiter, disableCORS, proxy)
+		return verifier.TestSearchOnlyWithLimiter(targetURL, auth, waf, payloadConfig, limiter, disableCORS, proxy)
 	}
 
 	// For postMessage sources
@@ -162,6 +176,7 @@ func verifyFinding(targetURL string, finding scanner.Finding, auth *verifier.Aut
 
 	return verifier.VerifyResult{
 		Source: finding.Source,
+		Error:  true,
 		Detail: "dynamic replay is not implemented for this source type; static finding remains unconfirmed",
 	}
 }

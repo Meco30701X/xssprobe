@@ -17,6 +17,17 @@ type Finding struct {
 	Confidence string // Confidence level: high/medium/low
 }
 
+func classifyFlowConfidence(source string) (severity, confidence string) {
+	// Network response data is not automatically attacker-controlled. Keep these
+	// heuristic flows actionable for review, but below direct URL/DOM input flows.
+	switch source {
+	case "XMLHttpRequest", "fetch":
+		return "medium", "medium"
+	default:
+		return "high", "high"
+	}
+}
+
 // FilterThirdPartyFindings removes low-confidence heuristics from scripts
 // outside the target's shared allowlisted domain. Generic libraries contain
 // many sink implementations but usually no attacker-controlled callsite; the
@@ -191,8 +202,7 @@ func ScanJS(jsContent string) []Finding {
 			}
 			if sourceUsedAsValue(trimmed, pattern.SourceRe) && pattern.SinkRe.MatchString(trimmed) {
 				filterInfo := detectFilter(trimmed)
-				severity := "high"
-				confidence := "high"
+				severity, confidence := classifyFlowConfidence(pattern.SourceName)
 				if filterInfo.IsFiltered {
 					severity = "low"
 					confidence = "low"
@@ -244,8 +254,7 @@ func ScanJS(jsContent string) []Finding {
 							// Also check current line for filtering
 							filterInfo = detectFilter(trimmed)
 						}
-						severity := "high"
-						confidence := "high"
+						severity, confidence := classifyFlowConfidence(sourceName)
 						if filterInfo.IsFiltered {
 							severity = "low"
 							confidence = "low"
@@ -537,9 +546,8 @@ func getSources() []pattern {
 		{"window.frames", regexp.MustCompile(`window\.frames`)},
 
 		// === URL/HTTP Sources ===
-		{"postMessage", regexp.MustCompile(`postMessage|addEventListener\s*\(\s*['"]message['"]`)},
 		{"message event data", regexp.MustCompile(`(?:event|evt|ev|e)\.data\b`)},
-		{"XMLHttpRequest", regexp.MustCompile(`XMLHttpRequest|\.responseText|\.response\b`)},
+		{"XMLHttpRequest", regexp.MustCompile(`\.responseText\b|\.response\b`)},
 		{"fetch", regexp.MustCompile(`fetch\s*\(|\.then\s*\(|\.json\s*\(`)},
 		{"URL", regexp.MustCompile(`new\s+URL\s*\(|URL\.parse|URLSearchParams`)},
 		{"FormData", regexp.MustCompile(`FormData|\.get\s*\(|\.getAll\s*\(`)},
@@ -589,7 +597,6 @@ func getSources() []pattern {
 		{"template literal", regexp.MustCompile("`[^`]*\\$\\{")},
 
 		// === Web API Sources ===
-		{"BroadcastChannel", regexp.MustCompile(`BroadcastChannel|\.postMessage`)},
 		{"ServiceWorker", regexp.MustCompile(`ServiceWorker|navigator\.serviceWorker`)},
 		{"WebRTC", regexp.MustCompile(`RTCPeerConnection|createDataChannel`)},
 		{"Geolocation", regexp.MustCompile(`getCurrentPosition|watchPosition`)},
@@ -644,28 +651,6 @@ func getSinks() []pattern {
 		// === Angular Sinks ===
 		{"Angular [innerHTML]", regexp.MustCompile(`\[innerHTML\]|\[outerHTML\]`)},
 		{"Angular $compile", regexp.MustCompile(`\$compile\s*\(`)},
-
-		// === Cookie Sinks ===
-		{"document.cookie", regexp.MustCompile(`document\.cookie\s*=`)},
-
-		// === Ajax/Fetch Sinks ===
-		{"$.ajax", regexp.MustCompile(`\$\.ajax\s*\(|jQuery\.ajax\s*\(`)},
-		{"$.get", regexp.MustCompile(`\$\.get\s*\(|jQuery\.get\s*\(`)},
-		{"$.post", regexp.MustCompile(`\$\.post\s*\(|jQuery\.post\s*\(`)},
-		{"fetch.body", regexp.MustCompile(`fetch\s*\(.*body`)},
-
-		// === WebSocket Sinks ===
-		{"WebSocket.send", regexp.MustCompile(`\.send\s*\(`)},
-
-		// === Message Sinks ===
-		{"postMessage", regexp.MustCompile(`\.postMessage\s*\(`)},
-		{"BroadcastChannel", regexp.MustCompile(`BroadcastChannel.*\.postMessage`)},
-
-		// === Prototype Pollution Sinks ===
-		{"Object.assign", regexp.MustCompile(`Object\.assign\s*\(`)},
-		{"Object.setPrototypeOf", regexp.MustCompile(`Object\.setPrototypeOf\s*\(`)},
-		{"__proto__", regexp.MustCompile(`__proto__|constructor\.prototype`)},
-		{"$.extend", regexp.MustCompile(`\$\.extend\s*\(|jQuery\.extend\s*\(`)},
 	}
 }
 

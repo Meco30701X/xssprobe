@@ -100,13 +100,16 @@ go build -o xssprobe .
 ./xssprobe -u https://target.com -verify
 
 # 全量测试（测试所有 payload，较慢）
-./xssprobe -u https://target.com -verify all
+./xssprobe -u https://target.com -verify=all
 
 # 快速验证（找到 1 个确认就停）
 ./xssprobe -u https://target.com -verify=1
 
 # 测试到 3 个确认就停
 ./xssprobe -u https://target.com -verify=3
+
+# 额外测试 URL 最后一个路径段（只发送 GET；可能改变路由匹配）
+./xssprobe -u https://target.com/invalid -verify=1 -path
 
 # 存储型 XSS 检测（默认 dry-run + safe + confirm，不提交数据）
 ./xssprobe -u https://target.com -stored
@@ -238,7 +241,8 @@ cat urls.txt | ./xssprobe -verify
 | `-f` | 本地 JS 文件 | — |
 | `-o` | JSON 输出路径 | — |
 | `-html` | HTML 报告输出路径 | — |
-| `-verify` | 动态验证（`-verify` 高成功率，`-verify all` 全量，`-verify N` 找到 N 个就停） | false |
+| `-verify` | 动态验证（`-verify` 高成功率，`-verify=all` 全量，`-verify=N` 找到 N 个就停） | false |
+| `-path` | 与 `-verify` 配合，测试 URL 最后一个路径段的反射；只发送 GET，可能改变路由匹配 | false |
 | `-stored` | 启用存储型 XSS 检测 | false |
 | `-spa` | SPA 渲染模式 | false |
 | `-crawl` | 自动爬虫 | false |
@@ -265,7 +269,7 @@ cat urls.txt | ./xssprobe -verify
 | `-threads` | 批量扫描并发数 | 5 |
 | `-wait` | SPA 渲染等待时间（秒） | 5 |
 | `-dry-run` | 干运行模式（`-stored` 默认启用） | false |
-| `-safe` | 仅使用安全 payload | false |
+| `-safe` | 仅用于 `-stored`，让提交的 payload 使用安全 canary；不影响 `-verify` | false |
 | `-confirm` | 每次提交前确认 | false |
 | `-yes` | 跳过法律确认（需配合 `-scope`） | false |
 | `-disable-cors` | ⚠️ 禁用浏览器同源策略（危险，仅限隔离测试环境） | false |
@@ -293,8 +297,8 @@ Source: location.hash → var hash → var data → Sink: innerHTML
 
 **验证模式**：
 - `-verify` — 测试高成功率 payload（默认，约 15 个，快速）
-- `-verify all` — 测试所有 payload（全量，较慢）
-- `-verify N` — 找到 N 个确认的 payload 后停止
+- `-verify=all` — 测试所有 payload（全量，较慢）
+- `-verify=N` — 找到 N 个确认的 payload 后停止
 
 ### 上下文感知
 

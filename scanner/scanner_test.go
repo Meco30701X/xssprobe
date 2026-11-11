@@ -6,9 +6,9 @@ import (
 
 func TestScanJS_SourceSinkDetection(t *testing.T) {
 	tests := []struct {
-		name     string
-		code     string
-		minFind  int
+		name    string
+		code    string
+		minFind int
 	}{
 		{
 			name:    "location.hash to innerHTML",
@@ -188,7 +188,7 @@ func TestGetSources(t *testing.T) {
 	// Check for common sources
 	commonSources := []string{
 		"location.hash", "location.search", "document.referrer",
-		"window.name", "postMessage",
+		"window.name", "message event data",
 	}
 
 	sourceNames := make(map[string]bool)
@@ -201,6 +201,51 @@ func TestGetSources(t *testing.T) {
 			t.Errorf("missing source: %s", name)
 		}
 	}
+}
+
+func TestPostMessageSenderIsNotAnXSSSink(t *testing.T) {
+	findings := ScanJS(`parent.postMessage(window.location.toString(), "*");`)
+	if len(findings) != 0 {
+		t.Fatalf("message sending alone should not be reported as XSS: %+v", findings)
+	}
+}
+
+func TestMessageEventDataToInnerHTMLRemainsCandidate(t *testing.T) {
+	code := `window.addEventListener("message", function(event) { document.getElementById("target").innerHTML = event.data; });`
+	findings := ScanJS(code)
+	for _, finding := range findings {
+		if finding.Source == "message event data" && finding.Sink == "innerHTML" {
+			return
+		}
+	}
+	t.Fatalf("expected event.data to innerHTML source/sink candidate, got %+v", findings)
+}
+
+func TestOutboundAndPrototypeOperationsAreNotXSSSinks(t *testing.T) {
+	for _, code := range []string{
+		`xhr.send(location.hash);`,
+		`fetch('/collect', {body: location.hash});`,
+		`socket.send(location.hash);`,
+		`document.cookie = location.hash;`,
+		`Object.assign({}, location.hash);`,
+	} {
+		if findings := ScanJS(code); len(findings) != 0 {
+			t.Errorf("non-execution operation was reported as XSS for %q: %+v", code, findings)
+		}
+	}
+}
+
+func TestXHRResponseToEvalIsAReviewLeadNotHighConfidence(t *testing.T) {
+	findings := ScanJS(`eval(xhr.responseText);`)
+	for _, finding := range findings {
+		if finding.Source == "XMLHttpRequest" && finding.Sink == "eval" {
+			if finding.Confidence != "medium" || finding.Severity != "medium" {
+				t.Fatalf("remote response flow confidence = %q/%q, want medium/medium", finding.Confidence, finding.Severity)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected XHR response-to-eval review candidate, got %+v", findings)
 }
 
 func TestGetSinks(t *testing.T) {
